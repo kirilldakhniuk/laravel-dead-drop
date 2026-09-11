@@ -1,0 +1,68 @@
+<?php
+
+declare(strict_types=1);
+
+namespace DeadDrop\DeadDrop\Schema;
+
+use DeadDrop\DeadDrop\Drivers\DriverFactory;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
+
+final class Introspector
+{
+    public function __construct(
+        private readonly DriverFactory $drivers,
+    ) {}
+
+    public function inspect(string $connection): DatabaseSchema
+    {
+        $db = DB::connection($connection);
+        $driver = $this->drivers->for($db);
+        $builder = Schema::connection($connection);
+        $estimates = $driver->estimatedRowCounts($db);
+
+        $tables = [];
+
+        foreach ($builder->getTables() as $meta) {
+            if (($meta['schema'] ?? null) === 'temp') {
+                continue; // SQLite lists temporary tables alongside real ones
+            }
+
+            $name = $meta['name'];
+
+            $columns = [];
+
+            foreach ($builder->getColumns($name) as $col) {
+                $columns[$col['name']] = new Column(
+                    name: $col['name'],
+                    type: $driver->normaliseType($col['type_name']),
+                    nativeType: $col['type'],
+                    nullable: $col['nullable'],
+                    autoIncrement: $col['auto_increment'],
+                    default: $col['default'] === null ? null : (string) $col['default'],
+                );
+            }
+
+            $indexes = array_map(
+                fn (array $i): Index => new Index($i['name'], $i['columns'], $i['unique'], $i['primary']),
+                $builder->getIndexes($name),
+            );
+
+            $foreignKeys = array_map(
+                fn (array $f): ForeignKey => new ForeignKey($f['columns'], $f['foreign_table'], $f['foreign_columns']),
+                $builder->getForeignKeys($name),
+            );
+
+            $tables[$name] = new Table(
+                name: $name,
+                columns: $columns,
+                indexes: $indexes,
+                foreignKeys: $foreignKeys,
+                estimatedRows: $estimates[$name] ?? 0,
+                estimatedBytes: (int) ($meta['size'] ?? 0),
+            );
+        }
+
+        return new DatabaseSchema($connection, $db->getDriverName(), $tables);
+    }
+}

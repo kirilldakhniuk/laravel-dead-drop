@@ -7,14 +7,18 @@ namespace DeadDrop\DeadDrop\Inference\Sources;
 use DeadDrop\DeadDrop\Inference\EdgeSource;
 use DeadDrop\DeadDrop\Inference\InferredEdge;
 use DeadDrop\DeadDrop\Schema\DatabaseSchema;
+use FilesystemIterator;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\MorphTo;
 use Illuminate\Database\Eloquent\Relations\Relation;
+use RecursiveDirectoryIterator;
+use RecursiveIteratorIterator;
 use ReflectionClass;
 use ReflectionMethod;
 use ReflectionNamedType;
-use Symfony\Component\Finder\Finder;
+use SplFileInfo;
+use Throwable;
 
 /**
  * Discovers belongsTo relations declared on Eloquent models and turns them
@@ -22,12 +26,17 @@ use Symfony\Component\Finder\Finder;
  *
  * Only public, zero-argument, non-static methods declared on the model
  * itself and typed to return a Relation subclass are ever called. Everything
- * else is skipped and reported via skipped().
+ * else is skipped and reported via skipped(). A model that cannot be
+ * instantiated, or a qualifying method that throws when called, is recorded
+ * in failed() and inference continues with the next candidate.
  */
 final class EloquentSource
 {
     /** @var list<string> */
     private array $skipped = [];
+
+    /** @var list<string> */
+    private array $failed = [];
 
     /**
      * @param  list<string>  $modelPaths  absolute directory paths to scan for model classes
@@ -42,11 +51,18 @@ final class EloquentSource
     public function infer(DatabaseSchema $schema): array
     {
         $this->skipped = [];
+        $this->failed = [];
 
         $edges = [];
 
         foreach ($this->discoverModelClasses() as $class) {
-            $model = new $class;
+            try {
+                $model = new $class;
+            } catch (Throwable $e) {
+                $this->failed[] = $class.': '.$e->getMessage();
+
+                continue;
+            }
 
             if (! $this->isInScope($model, $schema)) {
                 continue;
@@ -55,7 +71,13 @@ final class EloquentSource
             $reflection = new ReflectionClass($model);
 
             foreach ($this->relationMethods($reflection) as $method) {
-                $relation = $model->{$method->getName()}();
+                try {
+                    $relation = $model->{$method->getName()}();
+                } catch (Throwable $e) {
+                    $this->failed[] = $class.'::'.$method->getName().': '.$e->getMessage();
+
+                    continue;
+                }
 
                 if (! $relation instanceof BelongsTo || $relation instanceof MorphTo) {
                     continue;
@@ -87,6 +109,14 @@ final class EloquentSource
     public function skipped(): array
     {
         return $this->skipped;
+    }
+
+    /**
+     * @return list<string>
+     */
+    public function failed(): array
+    {
+        return $this->failed;
     }
 
     private function isInScope(Model $model, DatabaseSchema $schema): bool
@@ -136,18 +166,36 @@ final class EloquentSource
      */
     private function discoverModelClasses(): array
     {
-        $existingPaths = array_filter($this->modelPaths, static fn (string $path): bool => is_dir($path));
+        $files = [];
 
-        if ($existingPaths === []) {
-            return [];
+        foreach ($this->modelPaths as $path) {
+            if (! is_dir($path)) {
+                continue;
+            }
+
+            $iterator = new RecursiveIteratorIterator(
+                new RecursiveDirectoryIterator($path, FilesystemIterator::SKIP_DOTS),
+            );
+
+            foreach ($iterator as $file) {
+                if ($file instanceof SplFileInfo && $file->isFile() && $file->getExtension() === 'php') {
+                    $files[] = $file->getPathname();
+                }
+            }
         }
 
-        $finder = (new Finder)->files()->in($existingPaths)->name('*.php');
+        sort($files);
 
         $classes = [];
 
-        foreach ($finder as $file) {
-            $class = $this->classFromFile($file->getContents());
+        foreach ($files as $file) {
+            $contents = file_get_contents($file);
+
+            if ($contents === false) {
+                continue;
+            }
+
+            $class = $this->classFromFile($contents);
 
             if ($class === null || ! class_exists($class)) {
                 continue;

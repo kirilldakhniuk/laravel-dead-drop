@@ -1,0 +1,221 @@
+<?php
+
+declare(strict_types=1);
+
+namespace DeadDrop\DeadDrop\Planning;
+
+use DateTimeInterface;
+use DeadDrop\DeadDrop\Config\ConfigSet;
+use DeadDrop\DeadDrop\Config\TableClass;
+use DeadDrop\DeadDrop\Schema\SchemaSet;
+
+/**
+ * Turns a traversal into the ordered work a dump would do.
+ *
+ * The order is the whole point: a step's table is written after every table it
+ * references, so a restore can keep its foreign keys on. Connections come in
+ * the graph's order, and inside one connection the tables are sorted by their
+ * static edges — morph targets are decided by row data, so they cannot order
+ * anything.
+ */
+final class Planner
+{
+    public function __construct(
+        private readonly Traverser $traverser,
+    ) {}
+
+    /**
+     * Every table the traversal collected rows for, ordered for writing.
+     *
+     * The key sets live in temporary tables owned by the caller, so the plan
+     * is built while they are still there: the caller drops them afterwards.
+     *
+     * @throws UnsupportedTableException when a configured table cannot be addressed by a single primary key
+     * @throws CircularConnectionException when the connections reference each other in a cycle
+     */
+    public function plan(Root $root, ConfigSet $config, SchemaSet $schemas, ?DateTimeInterface $since = null): ExtractionPlan
+    {
+        $this->assertEveryTableIsAddressable($config, $schemas);
+
+        $result = $this->traverser->traverse($root, $config, $schemas, $since);
+
+        return new ExtractionPlan(
+            $this->order($this->steps($result, $config, $schemas), Graph::fromConfig($config)),
+            $result->unresolved(),
+        );
+    }
+
+    /**
+     * A dump addresses rows by primary key, so a table without a usable one
+     * cannot be dumped at all — that is a config decision, not something to
+     * discover halfway through a traversal. Tables the schema no longer has
+     * are drift, which `dead-drop:check` reports.
+     *
+     * @throws UnsupportedTableException
+     */
+    private function assertEveryTableIsAddressable(ConfigSet $config, SchemaSet $schemas): void
+    {
+        foreach ($config->connections as $connection => $connectionConfig) {
+            $connection = (string) $connection;
+            $schema = $schemas->for($connection);
+
+            foreach ($connectionConfig->tables as $name => $tableConfig) {
+                if ($tableConfig->removed || $tableConfig->class === TableClass::Skip) {
+                    continue;
+                }
+
+                $table = $schema->table((string) $name);
+
+                if ($table === null) {
+                    continue;
+                }
+
+                if ($table->hasCompositePrimaryKey()) {
+                    throw UnsupportedTableException::compositePrimaryKey($connection, $table->name);
+                }
+
+                if ($table->primaryKey() === null) {
+                    throw UnsupportedTableException::noPrimaryKey($connection, $table->name);
+                }
+            }
+        }
+    }
+
+    /**
+     * One step per key set that actually holds rows. A lookup table is taken
+     * whole, so it carries no key table even though the traversal seeded one.
+     *
+     * @return list<PlanStep>
+     */
+    private function steps(TraversalResult $result, ConfigSet $config, SchemaSet $schemas): array
+    {
+        $steps = [];
+
+        foreach ($result->keySets() as $keySet) {
+            $rows = $keySet->count();
+
+            if ($rows === 0) {
+                continue;
+            }
+
+            $table = $schemas->for($keySet->connection)->table($keySet->table);
+            $lookup = $config->for($keySet->connection)->table($keySet->table)?->class === TableClass::Lookup;
+
+            $steps[] = new PlanStep(
+                connection: $keySet->connection,
+                table: $keySet->table,
+                keyTable: $lookup ? null : $keySet->tableName,
+                rows: $rows,
+                estimatedBytes: $table === null ? 0 : intdiv($table->estimatedBytes * $rows, max($table->estimatedRows, 1)),
+            );
+        }
+
+        return $steps;
+    }
+
+    /**
+     * @param  list<PlanStep>  $steps
+     * @return list<PlanStep>
+     */
+    private function order(array $steps, Graph $graph): array
+    {
+        /** @var array<string, list<PlanStep>> $groups */
+        $groups = [];
+
+        foreach ($steps as $step) {
+            $groups[$step->connection][] = $step;
+        }
+
+        $ordered = [];
+
+        foreach ($graph->connectionOrder() as $connection) {
+            if (isset($groups[$connection])) {
+                $ordered = [...$ordered, ...$this->orderTables($groups[$connection], $graph, $connection)];
+
+                unset($groups[$connection]);
+            }
+        }
+
+        // A key set of an unconfigured connection cannot happen, but dropping
+        // a step silently would be worse than an unordered tail.
+        ksort($groups);
+
+        foreach ($groups as $connection => $group) {
+            $ordered = [...$ordered, ...$this->orderTables($group, $graph, (string) $connection)];
+        }
+
+        return $ordered;
+    }
+
+    /**
+     * The steps of one connection, referenced tables first. Ties are broken by
+     * table name so a plan is reproducible, and a cycle of references — which
+     * no order satisfies — leaves the rest in name order rather than failing:
+     * the dump still has to be written.
+     *
+     * @param  list<PlanStep>  $steps
+     * @return list<PlanStep>
+     */
+    private function orderTables(array $steps, Graph $graph, string $connection): array
+    {
+        /** @var array<string, PlanStep> $remaining keyed by table name */
+        $remaining = [];
+
+        foreach ($steps as $step) {
+            $remaining[$step->table] = $step;
+        }
+
+        ksort($remaining);
+
+        /** @var array<string, array<string, true>> $pending table => the tables it still waits on */
+        $pending = [];
+
+        foreach (array_keys($remaining) as $table) {
+            $table = (string) $table;
+            $pending[$table] = [];
+
+            foreach ($graph->outboundEdges($connection, $table) as $edge) {
+                // Another connection's tables are ordered by the connection
+                // order; a self-reference and a table with no step order
+                // nothing.
+                if ($edge->targetConnection !== $connection || $edge->targetTable === $table || ! isset($remaining[$edge->targetTable])) {
+                    continue;
+                }
+
+                $pending[$table][$edge->targetTable] = true;
+            }
+        }
+
+        $ordered = [];
+
+        while ($pending !== []) {
+            $ready = [];
+
+            foreach ($pending as $table => $waitsOn) {
+                if ($waitsOn === []) {
+                    $ready[] = (string) $table;
+                }
+            }
+
+            if ($ready === []) {
+                break;
+            }
+
+            sort($ready);
+
+            foreach ($ready as $table) {
+                $ordered[] = $remaining[$table];
+
+                unset($pending[$table], $remaining[$table]);
+            }
+
+            foreach ($pending as $table => $waitsOn) {
+                foreach ($ready as $done) {
+                    unset($pending[$table][$done]);
+                }
+            }
+        }
+
+        return [...$ordered, ...array_values($remaining)];
+    }
+}

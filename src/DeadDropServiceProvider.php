@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace DeadDrop\DeadDrop;
 
 use DeadDrop\DeadDrop\Console\Commands\CheckCommand;
+use DeadDrop\DeadDrop\Console\Commands\DumpCommand;
 use DeadDrop\DeadDrop\Console\Commands\InitCommand;
 use DeadDrop\DeadDrop\Inference\Sources\EloquentSource;
 use DeadDrop\DeadDrop\Planning\KeySetRepository;
@@ -40,6 +41,7 @@ class DeadDropServiceProvider extends ServiceProvider
         $this->commands([
             InitCommand::class,
             CheckCommand::class,
+            DumpCommand::class,
         ]);
     }
 }

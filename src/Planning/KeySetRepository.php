@@ -14,8 +14,18 @@ use Illuminate\Support\Facades\DB;
  */
 final class KeySetRepository
 {
+    private const int CHUNK = 5000;
+
     /** @var array<string, KeySet> keyed "{connection}.{table}" */
     private array $keySets = [];
+
+    /**
+     * Copies of another connection's key sets, kept apart from the real ones
+     * so a mirror can never become a plan step or an ascend source.
+     *
+     * @var array<string, KeySet> keyed "{targetConnection}:{sourceConnection}.{table}"
+     */
+    private array $mirrors = [];
 
     public function __construct(
         private readonly DriverFactory $drivers,
@@ -29,13 +39,29 @@ final class KeySetRepository
             return $existing;
         }
 
-        $db = DB::connection($connection);
-        $driver = $this->drivers->for($db);
-        $name = "dd_keys_{$table}";
+        return $this->keySets["{$connection}.{$table}"] = $this->make($connection, $table, "dd_keys_{$table}", $type);
+    }
 
-        $driver->createKeyTable($db, $name, $type);
+    /**
+     * A copy of a key set on another connection, so an edge that crosses
+     * connections has something to join against. The source keeps growing
+     * while the traversal runs, so every call refreshes the mirror: the keys
+     * travel in chunks and the ones already there are ignored.
+     */
+    public function mirror(KeySet $source, string $targetConnection): KeySet
+    {
+        $mirror = $this->mirrors["{$targetConnection}:{$source->connection}.{$source->table}"] ??= $this->make(
+            $targetConnection,
+            $source->table,
+            "dd_keys_mirror_{$source->connection}_{$source->table}",
+            $source->type,
+        );
 
-        return $this->keySets["{$connection}.{$table}"] = new KeySet($driver, $db, $connection, $table, $type, $name);
+        $source->chunk(self::CHUNK, function (array $keys) use ($mirror): void {
+            $mirror->add($keys);
+        });
+
+        return $mirror;
     }
 
     public function get(string $connection, string $table): ?KeySet
@@ -43,7 +69,12 @@ final class KeySetRepository
         return $this->keySets["{$connection}.{$table}"] ?? null;
     }
 
-    /** @return array<string, KeySet> keyed "{connection}.{table}" */
+    /**
+     * The key sets the traversal collected — mirrors are working copies and
+     * are deliberately left out.
+     *
+     * @return array<string, KeySet> keyed "{connection}.{table}"
+     */
     public function all(): array
     {
         return $this->keySets;
@@ -51,12 +82,23 @@ final class KeySetRepository
 
     public function dropAll(): void
     {
-        foreach ($this->keySets as $keySet) {
+        foreach ([...array_values($this->keySets), ...array_values($this->mirrors)] as $keySet) {
             $db = DB::connection($keySet->connection);
 
             $this->drivers->for($db)->dropKeyTable($db, $keySet->tableName);
         }
 
         $this->keySets = [];
+        $this->mirrors = [];
+    }
+
+    private function make(string $connection, string $table, string $name, ColumnType $type): KeySet
+    {
+        $db = DB::connection($connection);
+        $driver = $this->drivers->for($db);
+
+        $driver->createKeyTable($db, $name, $type);
+
+        return new KeySet($driver, $db, $connection, $table, $type, $name);
     }
 }

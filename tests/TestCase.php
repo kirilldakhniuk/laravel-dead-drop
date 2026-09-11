@@ -24,5 +24,12 @@ abstract class TestCase extends Orchestra
             'foreign_key_constraints' => true,
             'use_native_json' => true,
         ]);
+        $app['config']->set('database.connections.dd_analytics', [
+            'driver' => 'sqlite',
+            'database' => ':memory:',
+            'prefix' => '',
+            'foreign_key_constraints' => true,
+            'use_native_json' => true,
+        ]);
     }
 }

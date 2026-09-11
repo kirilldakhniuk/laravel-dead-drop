@@ -53,6 +53,11 @@ final class Traverser
 
         $graph = Graph::fromConfig($config);
 
+        // One breadth-first pass covers every connection, but an order has to
+        // exist at all: this fails a cycle of connections before the first
+        // key table is created.
+        $graph->connectionOrder();
+
         /** @var array<string, UnresolvedReference> $unresolved */
         $unresolved = [];
 
@@ -138,7 +143,7 @@ final class Traverser
             }
 
             foreach ($graph->inboundEdges($connection, $table) as $edge) {
-                if (! $edge->descend || $edge->connection !== $edge->targetConnection) {
+                if (! $edge->descend) {
                     continue;
                 }
 
@@ -178,8 +183,14 @@ final class Traverser
             return 0;
         }
 
+        // A child on another connection cannot join the parent's key table, so
+        // the parent's keys are mirrored onto the child's connection first.
+        $keys = $edge->connection === $parent->connection
+            ? $parent->tableName
+            : $this->keys->mirror($parent, $edge->connection)->tableName;
+
         $query = DB::connection($edge->connection)->table($table)
-            ->join($parent->tableName, "{$table}.{$edge->column}", '=', "{$parent->tableName}.k");
+            ->join($keys, "{$table}.{$edge->column}", '=', "{$keys}.k");
 
         return $this->collect(
             $this->scope($query, $table, $config->for($edge->connection)->table($table), $since)
@@ -522,10 +533,6 @@ final class Traverser
      */
     private function ineligible(GraphEdge $edge, Graph $graph, SchemaSet $schemas): ?string
     {
-        if ($edge->targetConnection !== $edge->connection) {
-            return "cross-connection edge to {$edge->targetConnection}.{$edge->targetTable} is not supported yet";
-        }
-
         $reason = $this->ineligibleTarget($edge->targetConnection, $edge->targetTable, $graph, $schemas);
 
         if ($reason !== null) {

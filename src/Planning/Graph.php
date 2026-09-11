@@ -17,18 +17,23 @@ final readonly class Graph
     /**
      * @param  list<GraphEdge>  $edges
      * @param  array<string, TableClass>  $classes  keyed "{connection}.{table}", removed tables omitted
+     * @param  list<string>  $connections  every configured connection, edges or not
      */
     private function __construct(
         private array $edges,
         private array $classes,
+        private array $connections,
     ) {}
 
     public static function fromConfig(ConfigSet $config): self
     {
         $edges = [];
         $classes = [];
+        $connections = [];
 
         foreach ($config->connections as $connection => $connectionConfig) {
+            $connections[] = $connection;
+
             foreach ($connectionConfig->tables as $name => $table) {
                 if ($table->removed) {
                     continue;
@@ -54,7 +59,69 @@ final readonly class Graph
             }
         }
 
-        return new self($edges, $classes);
+        return new self($edges, $classes, $connections);
+    }
+
+    /**
+     * The configured connections, ordered so that a connection comes after
+     * every connection its edges point into: keys are mirrored from the
+     * connection that owns them onto the connection that needs them, so the
+     * owner has to be reachable first. Ties are broken alphabetically to keep
+     * a plan reproducible.
+     *
+     * @return list<string>
+     *
+     * @throws CircularConnectionException when no such order exists
+     */
+    public function connectionOrder(): array
+    {
+        /** @var array<string, array<string, true>> $pending connection => the connections it still waits on */
+        $pending = [];
+
+        foreach ($this->connections as $connection) {
+            $pending[$connection] = [];
+        }
+
+        foreach ($this->edges as $edge) {
+            if ($edge->connection === $edge->targetConnection) {
+                continue;
+            }
+
+            $pending[$edge->targetConnection] ??= [];
+            $pending[$edge->connection][$edge->targetConnection] = true;
+        }
+
+        $order = [];
+
+        while ($pending !== []) {
+            $ready = [];
+
+            foreach ($pending as $connection => $waitsOn) {
+                if ($waitsOn === []) {
+                    $ready[] = (string) $connection;
+                }
+            }
+
+            if ($ready === []) {
+                $cycle = array_map(strval(...), array_keys($pending));
+                sort($cycle);
+
+                throw new CircularConnectionException('Connections reference each other in a cycle: '.implode(', ', $cycle));
+            }
+
+            sort($ready);
+            $next = $ready[0];
+
+            unset($pending[$next]);
+
+            foreach ($pending as $connection => $waitsOn) {
+                unset($pending[$connection][$next]);
+            }
+
+            $order[] = $next;
+        }
+
+        return $order;
     }
 
     /**

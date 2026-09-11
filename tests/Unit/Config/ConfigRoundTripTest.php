@@ -69,3 +69,15 @@ it('loads every connection file in a directory', function () {
         ->and($set->for('a')->table('t')->class)->toBe(TableClass::Data)
         ->and((new ConfigLoader)->load('missing', $directory))->toBeNull();
 });
+
+it('renders human references on a skip table instead of dropping them', function () {
+    $config = new ConnectionConfig('mysql', [
+        'legacy' => new TableConfig('legacy', TableClass::Skip, ['id'], [
+            'legacy_ref' => new Reference(null, 'legacy', 'id', true, EdgeSource::Manual),
+        ], [], null, null, null),
+    ]);
+
+    $source = (new ConfigRenderer)->render($config);
+
+    expect($source)->toContain("'legacy_ref' => ['legacy.id', 'source' => 'manual'],");
+});

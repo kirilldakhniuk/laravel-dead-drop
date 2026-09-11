@@ -4,27 +4,36 @@ declare(strict_types=1);
 
 namespace DeadDrop\DeadDrop\Config;
 
+use InvalidArgumentException;
+
 /**
  * Renders a connection's config as PHP source a human reviews and edits.
  *
- * The output is deterministic — tables, references and redactions are sorted
- * and every key appears in a fixed order — so re-running `init` produces an
- * empty diff when nothing changed. Nothing is written as a comment: every
- * rendered value is data the merger needs to read back.
+ * This class only formats: what is included and in what order is decided by
+ * `ConnectionConfig::toArray()`, so the rendered file and the array form can
+ * never disagree. The output is deterministic — tables, references and
+ * redactions are sorted and keys appear in a fixed order — so re-running
+ * `init` produces an empty diff when nothing changed. Nothing is written as
+ * a comment: every rendered value is data the merger needs to read back.
  */
 final class ConfigRenderer
 {
     private const string INDENT = '    ';
 
+    /**
+     * Table keys whose value renders as an indented block rather than on one
+     * line, because a human edits their entries row by row.
+     *
+     * @var list<string>
+     */
+    private const array BLOCK_KEYS = ['references', 'redact'];
+
     public function render(ConnectionConfig $config): string
     {
-        $tables = $config->tables;
-        ksort($tables);
-
         $lines = ['<?php', '', 'declare(strict_types=1);', '', 'return ['];
 
-        foreach ($tables as $table) {
-            foreach ($this->table($table) as $line) {
+        foreach ($config->toArray() as $name => $table) {
+            foreach ($this->table($name, $table) as $line) {
                 $lines[] = $line;
             }
         }
@@ -35,121 +44,87 @@ final class ConfigRenderer
     }
 
     /**
+     * @param  array<string, mixed>  $table
      * @return list<string>
      */
-    private function table(TableConfig $table): array
+    private function table(string $name, array $table): array
     {
-        $indent = self::INDENT.self::INDENT;
+        $lines = [$this->indent(1).$this->string($name).' => ['];
 
-        $lines = [self::INDENT.$this->string($table->name).' => ['];
-        $lines[] = $indent."'class' => ".$this->string($table->class->value).',';
+        foreach ($table as $key => $value) {
+            if (is_array($value) && in_array($key, self::BLOCK_KEYS, true)) {
+                foreach ($this->block($key, $value) as $line) {
+                    $lines[] = $line;
+                }
 
-        if ($table->removed) {
-            $lines[] = $indent."'removed' => true,";
+                continue;
+            }
+
+            $lines[] = $this->indent(2).$this->string($key).' => '.$this->value($value).',';
         }
 
-        if ($table->window !== null) {
-            $lines[] = $indent."'window' => ".$this->string($table->window).',';
-        }
-
-        if ($table->exclude !== null) {
-            $lines[] = $indent."'exclude' => ".$this->string($table->exclude).',';
-        }
-
-        if ($table->morph !== null) {
-            $lines[] = $indent."'morph' => ['type' => ".$this->string($table->morph['type']).", 'id' => ".$this->string($table->morph['id']).'],';
-        }
-
-        $lines[] = $indent."'columns' => ".$this->inlineList($table->columns).',';
-
-        if ($table->class === TableClass::Skip) {
-            $lines[] = self::INDENT.'],';
-
-            return $lines;
-        }
-
-        foreach ($this->references($table->references) as $line) {
-            $lines[] = $line;
-        }
-
-        foreach ($this->redact($table->redact) as $line) {
-            $lines[] = $line;
-        }
-
-        $lines[] = self::INDENT.'],';
+        $lines[] = $this->indent(1).'],';
 
         return $lines;
     }
 
     /**
-     * @param  array<string, Reference>  $references
+     * @param  array<array-key, mixed>  $entries
      * @return list<string>
      */
-    private function references(array $references): array
+    private function block(string $key, array $entries): array
     {
-        if ($references === []) {
-            return [];
+        $lines = [$this->indent(2).$this->string($key).' => ['];
+
+        foreach ($entries as $column => $entry) {
+            $lines[] = $this->indent(3).$this->string((string) $column).' => '.$this->value($entry).',';
         }
 
-        ksort($references);
-
-        $lines = [self::INDENT.self::INDENT."'references' => ["];
-
-        foreach ($references as $column => $reference) {
-            $lines[] = self::INDENT.self::INDENT.self::INDENT.$this->string($column).' => '.$this->reference($reference).',';
-        }
-
-        $lines[] = self::INDENT.self::INDENT.'],';
+        $lines[] = $this->indent(2).'],';
 
         return $lines;
+    }
+
+    private function value(mixed $value): string
+    {
+        if (is_bool($value)) {
+            return $value ? 'true' : 'false';
+        }
+
+        if (is_string($value)) {
+            return $this->string($value);
+        }
+
+        if (is_array($value)) {
+            return $this->inline($value);
+        }
+
+        throw new InvalidArgumentException('A config value must be a string, a boolean or an array.');
     }
 
     /**
-     * @param  array<string, string>  $redact
-     * @return list<string>
+     * @param  array<array-key, mixed>  $values
      */
-    private function redact(array $redact): array
+    private function inline(array $values): string
     {
-        if ($redact === []) {
-            return [];
+        $parts = [];
+
+        foreach ($values as $key => $value) {
+            $parts[] = is_int($key)
+                ? $this->value($value)
+                : $this->string($key).' => '.$this->value($value);
         }
-
-        ksort($redact);
-
-        $lines = [self::INDENT.self::INDENT."'redact' => ["];
-
-        foreach ($redact as $column => $transformer) {
-            $lines[] = self::INDENT.self::INDENT.self::INDENT.$this->string($column).' => '.$this->string($transformer).',';
-        }
-
-        $lines[] = self::INDENT.self::INDENT.'],';
-
-        return $lines;
-    }
-
-    private function reference(Reference $reference): string
-    {
-        $parts = [$this->string($reference->target())];
-
-        if (! $reference->descend) {
-            $parts[] = "'descend' => false";
-        }
-
-        $parts[] = "'source' => ".$this->string($reference->source->value);
 
         return '['.implode(', ', $parts).']';
-    }
-
-    /**
-     * @param  list<string>  $values
-     */
-    private function inlineList(array $values): string
-    {
-        return '['.implode(', ', array_map($this->string(...), $values)).']';
     }
 
     private function string(string $value): string
     {
         return "'".str_replace(['\\', "'"], ['\\\\', "\\'"], $value)."'";
+    }
+
+    private function indent(int $depth): string
+    {
+        return str_repeat(self::INDENT, $depth);
     }
 }

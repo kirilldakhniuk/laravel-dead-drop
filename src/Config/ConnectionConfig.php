@@ -46,6 +46,9 @@ final readonly class ConnectionConfig
     }
 
     /**
+     * The rendered shape: tables sorted by name, each in `TableConfig`'s
+     * fixed key order.
+     *
      * @return array<string, array<string, mixed>>
      */
     public function toArray(): array
@@ -55,6 +58,8 @@ final readonly class ConnectionConfig
         foreach ($this->tables as $name => $table) {
             $tables[$name] = $table->toArray();
         }
+
+        ksort($tables);
 
         return $tables;
     }

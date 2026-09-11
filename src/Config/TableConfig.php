@@ -50,7 +50,22 @@ final readonly class TableConfig
     }
 
     /**
-     * @return array<string, mixed>
+     * The rendered shape, and the single source of truth for key order and
+     * sorting: `class`, `removed` (only when true), `window`, `exclude`,
+     * `morph`, `columns`, `references`, `redact`, with null and empty keys
+     * omitted, `columns` always present in schema order, and `references`
+     * and `redact` sorted by column.
+     *
+     * @return array{
+     *     class: string,
+     *     removed?: true,
+     *     window?: string,
+     *     exclude?: string,
+     *     morph?: array{type: string, id: string},
+     *     columns: list<string>,
+     *     references?: array<string, array<array-key, string|bool>>,
+     *     redact?: array<string, string>,
+     * }
      */
     public function toArray(): array
     {
@@ -60,10 +75,16 @@ final readonly class TableConfig
             $table['removed'] = true;
         }
 
-        foreach (['window' => $this->window, 'exclude' => $this->exclude, 'morph' => $this->morph] as $key => $value) {
-            if ($value !== null) {
-                $table[$key] = $value;
-            }
+        if ($this->window !== null) {
+            $table['window'] = $this->window;
+        }
+
+        if ($this->exclude !== null) {
+            $table['exclude'] = $this->exclude;
+        }
+
+        if ($this->morph !== null) {
+            $table['morph'] = $this->morph;
         }
 
         $table['columns'] = $this->columns;
@@ -75,11 +96,16 @@ final readonly class TableConfig
         }
 
         if ($references !== []) {
+            ksort($references);
+
             $table['references'] = $references;
         }
 
         if ($this->redact !== []) {
-            $table['redact'] = $this->redact;
+            $redact = $this->redact;
+            ksort($redact);
+
+            $table['redact'] = $redact;
         }
 
         return $table;

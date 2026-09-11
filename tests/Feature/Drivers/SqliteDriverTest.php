@@ -23,6 +23,24 @@ it('round trips keys through a key table', function () {
     $driver->dropKeyTable($connection, 'dd_keys_users');
 });
 
+it('round trips keys through a key table on a prefixed connection', function () {
+    config()->set('database.connections.dd_prefixed', [
+        'driver' => 'sqlite',
+        'database' => ':memory:',
+        'prefix' => 'app_',
+    ]);
+
+    $driver = new SqliteDriver;
+    $connection = DB::connection('dd_prefixed');
+
+    $driver->createKeyTable($connection, 'dd_keys_users', ColumnType::Integer);
+    $driver->insertKeys($connection, 'dd_keys_users', [1, 2, 3]);
+
+    expect($driver->countKeys($connection, 'dd_keys_users'))->toBe(3);
+
+    $driver->dropKeyTable($connection, 'dd_keys_users');
+});
+
 it('does not grow the key table when a duplicate key is inserted', function () {
     $driver = new SqliteDriver;
     $connection = DB::connection();

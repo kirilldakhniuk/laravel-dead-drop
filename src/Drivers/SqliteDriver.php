@@ -21,11 +21,7 @@ final class SqliteDriver implements DatabaseDriver
     {
         $counts = [];
 
-        foreach ($connection->getSchemaBuilder()->getTableListing() as $table) {
-            if (str_starts_with($table, 'sqlite_')) {
-                continue;
-            }
-
+        foreach ($connection->getSchemaBuilder()->getTableListing(schemaQualified: false) as $table) {
             $counts[$table] = (int) $connection->table($table)->count();
         }
 
@@ -35,9 +31,10 @@ final class SqliteDriver implements DatabaseDriver
     public function createKeyTable(Connection $connection, string $name, ColumnType $keyType): void
     {
         $type = $keyType === ColumnType::Integer ? 'INTEGER' : 'TEXT';
+        $table = $connection->getTablePrefix().$name;
 
-        $connection->statement("DROP TABLE IF EXISTS {$this->quote($name)}");
-        $connection->statement("CREATE TEMPORARY TABLE {$this->quote($name)} (k {$type} PRIMARY KEY)");
+        $connection->statement("DROP TABLE IF EXISTS temp.{$this->quote($table)}");
+        $connection->statement("CREATE TEMPORARY TABLE {$this->quote($table)} (k {$type} PRIMARY KEY)");
     }
 
     /** @param array<int, int|string> $keys */
@@ -59,7 +56,9 @@ final class SqliteDriver implements DatabaseDriver
 
     public function dropKeyTable(Connection $connection, string $name): void
     {
-        $connection->statement("DROP TABLE IF EXISTS {$this->quote($name)}");
+        $table = $connection->getTablePrefix().$name;
+
+        $connection->statement("DROP TABLE IF EXISTS temp.{$this->quote($table)}");
     }
 
     public function quote(string $identifier): string

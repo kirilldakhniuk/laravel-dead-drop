@@ -37,9 +37,10 @@ final class MySqlDriver implements DatabaseDriver
     public function createKeyTable(Connection $connection, string $name, ColumnType $keyType): void
     {
         $type = $keyType === ColumnType::Integer ? 'BIGINT UNSIGNED' : 'VARCHAR(191)';
+        $table = $connection->getTablePrefix().$name;
 
-        $connection->statement("DROP TEMPORARY TABLE IF EXISTS {$this->quote($name)}");
-        $connection->statement("CREATE TEMPORARY TABLE {$this->quote($name)} (k {$type} PRIMARY KEY) ENGINE=InnoDB");
+        $connection->statement("DROP TEMPORARY TABLE IF EXISTS {$this->quote($table)}");
+        $connection->statement("CREATE TEMPORARY TABLE {$this->quote($table)} (k {$type} PRIMARY KEY) ENGINE=InnoDB");
     }
 
     /** @param array<int, int|string> $keys */
@@ -61,7 +62,9 @@ final class MySqlDriver implements DatabaseDriver
 
     public function dropKeyTable(Connection $connection, string $name): void
     {
-        $connection->statement("DROP TEMPORARY TABLE IF EXISTS {$this->quote($name)}");
+        $table = $connection->getTablePrefix().$name;
+
+        $connection->statement("DROP TEMPORARY TABLE IF EXISTS {$this->quote($table)}");
     }
 
     public function quote(string $identifier): string

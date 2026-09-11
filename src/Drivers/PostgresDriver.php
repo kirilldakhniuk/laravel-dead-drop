@@ -38,9 +38,10 @@ final class PostgresDriver implements DatabaseDriver
     public function createKeyTable(Connection $connection, string $name, ColumnType $keyType): void
     {
         $type = $keyType === ColumnType::Integer ? 'BIGINT' : 'TEXT';
+        $table = $connection->getTablePrefix().$name;
 
-        $connection->statement("DROP TABLE IF EXISTS {$this->quote($name)}");
-        $connection->statement("CREATE TEMPORARY TABLE {$this->quote($name)} (k {$type} PRIMARY KEY) ON COMMIT PRESERVE ROWS");
+        $connection->statement("DROP TABLE IF EXISTS pg_temp.{$this->quote($table)}");
+        $connection->statement("CREATE TEMPORARY TABLE {$this->quote($table)} (k {$type} PRIMARY KEY) ON COMMIT PRESERVE ROWS");
     }
 
     /** @param array<int, int|string> $keys */
@@ -62,7 +63,9 @@ final class PostgresDriver implements DatabaseDriver
 
     public function dropKeyTable(Connection $connection, string $name): void
     {
-        $connection->statement("DROP TABLE IF EXISTS {$this->quote($name)}");
+        $table = $connection->getTablePrefix().$name;
+
+        $connection->statement("DROP TABLE IF EXISTS pg_temp.{$this->quote($table)}");
     }
 
     public function quote(string $identifier): string

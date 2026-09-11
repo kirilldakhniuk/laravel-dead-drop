@@ -31,6 +31,15 @@ final class Traverser
 {
     private const int CHUNK = 5000;
 
+    /**
+     * The descending morph pass's distinct-type scan, which is invariant for
+     * the length of one descend — the source database is only read — while the
+     * frontier table it is asked about changes on every dequeue.
+     *
+     * @var array<string, list<array{string, string}>> keyed "{connection}.{table}"
+     */
+    private array $morphScans = [];
+
     public function __construct(
         private readonly KeySetRepository $keys,
         private readonly MorphResolver $morphs,
@@ -115,6 +124,8 @@ final class Traverser
      */
     private function descend(Root $root, Graph $graph, ConfigSet $config, SchemaSet $schemas, ?DateTimeInterface $since, array &$unresolved): void
     {
+        $this->morphScans = [];
+
         /** @var list<array{string, string}> $queue */
         $queue = [[$root->connection, $root->table]];
 
@@ -214,12 +225,13 @@ final class Traverser
                 continue;
             }
 
-            // A morph table only earns a key set once one of its type values
+            // Scanned once per descend, then filtered per frontier table: a
+            // morph table only earns a key set once one of its type values
             // actually names the table on the frontier.
-            $types = $this->frontierTypes(
-                $this->morphTargets($db->table($table), $connection, $table, $morph['type'], $unresolved),
-                $parent->table,
-            );
+            $scan = $this->morphScans["{$connection}.{$table}"]
+                ??= $this->morphTargets($db->table($table), $connection, $table, $morph['type'], $unresolved);
+
+            $types = $this->frontierTypes($scan, $parent->table);
 
             $child = $types === [] ? null : $this->keySet($connection, $table, $schemas);
 

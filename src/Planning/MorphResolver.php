@@ -6,6 +6,7 @@ namespace DeadDrop\DeadDrop\Planning;
 
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\Relation;
+use ReflectionClass;
 
 /**
  * Turns the type string stored in a polymorphic column into the table it
@@ -23,6 +24,13 @@ final class MorphResolver
         $class = Relation::morphMap()[$type] ?? $type;
 
         if (! class_exists($class) || ! is_subclass_of($class, Model::class)) {
+            return null;
+        }
+
+        // A morph type naming an abstract base model resolves to a real class
+        // that cannot be constructed, and the table name is only reachable
+        // through an instance.
+        if (! (new ReflectionClass($class))->isInstantiable()) {
             return null;
         }
 

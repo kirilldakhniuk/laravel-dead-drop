@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 use DeadDrop\DeadDrop\Planning\MorphResolver;
+use DeadDrop\DeadDrop\Tests\Fixtures\Models\AbstractRecord;
 use DeadDrop\DeadDrop\Tests\Fixtures\Models\Order;
 use DeadDrop\DeadDrop\Tests\Fixtures\SchemaBuilder;
 use Illuminate\Database\Eloquent\Relations\Relation;
@@ -54,4 +55,15 @@ it('reports an unresolvable morph type instead of throwing', function () {
     $reasons = array_map(fn ($u) => $u->reason, $result->unresolved());
 
     expect($reasons)->toContain('unmapped morph type: gone');
+});
+
+it('ascends from a collected morph row to its target', function () {
+    $result = traverseFixture('dd_test.comments:2');
+
+    expect(collectedKeys($result, 'orders'))->toBe([99])
+        ->and(collectedKeys($result, 'companies'))->toBe([2]);
+});
+
+it('returns null for an abstract model class', function () {
+    expect((new MorphResolver)->tableFor(AbstractRecord::class))->toBeNull();
 });

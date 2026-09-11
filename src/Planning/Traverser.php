@@ -36,10 +36,14 @@ final class Traverser
 
     public function traverse(Root $root, ConfigSet $config, SchemaSet $schemas, ?DateTimeInterface $since = null): TraversalResult
     {
+        // A traversal owns its key tables: a second run in the same container
+        // scope must not accumulate into the previous run's.
+        $this->keys->dropAll();
+
         $graph = Graph::fromConfig($config);
 
         $this->seedRoot($root, $graph, $schemas);
-        $this->seedLookups($config, $schemas);
+        $this->seedLookups($root, $config, $schemas);
         $this->descend($root, $graph, $config, $schemas, $since);
 
         $unresolved = $this->ascend($graph, $schemas);
@@ -63,13 +67,19 @@ final class Traverser
 
     /**
      * Lookup tables are copied whole, so their key set is seeded with every
-     * primary key before the traversal starts and is never descended into.
+     * primary key before the traversal starts and is never descended into. The
+     * root is the exception: a lookup root is traversed as if it were data, so
+     * it keeps the ids the caller asked for.
      */
-    private function seedLookups(ConfigSet $config, SchemaSet $schemas): void
+    private function seedLookups(Root $root, ConfigSet $config, SchemaSet $schemas): void
     {
         foreach ($config->connections as $connection => $connectionConfig) {
             foreach ($connectionConfig->tables as $name => $table) {
                 if ($table->removed || $table->class !== TableClass::Lookup) {
+                    continue;
+                }
+
+                if ($connection === $root->connection && $name === $root->table) {
                     continue;
                 }
 
@@ -92,14 +102,15 @@ final class Traverser
 
     /**
      * Breadth-first over the inbound descending edges, one table at a time. A
-     * table is queued once: the pass that first collects rows for it is the
-     * pass that descends from it.
+     * table is re-queued every time it grows, so rows reached later through a
+     * second inbound edge — or through a self-reference — still have their own
+     * children collected. This terminates because a queue entry costs at least
+     * one new key and keys are finite.
      */
     private function descend(Root $root, Graph $graph, ConfigSet $config, SchemaSet $schemas, ?DateTimeInterface $since): void
     {
         /** @var list<array{string, string}> $queue */
         $queue = [[$root->connection, $root->table]];
-        $queued = ["{$root->connection}.{$root->table}" => true];
 
         while ($queue !== []) {
             [$connection, $table] = array_shift($queue);
@@ -130,10 +141,7 @@ final class Traverser
                     continue;
                 }
 
-                $identifier = "{$edge->connection}.{$edge->table}";
-
-                if ($this->descendInto($edge, $parent, $child, $config, $schemas, $since) > 0 && ! isset($queued[$identifier])) {
-                    $queued[$identifier] = true;
+                if ($this->descendInto($edge, $parent, $child, $config, $schemas, $since) > 0) {
                     $queue[] = [$edge->connection, $edge->table];
                 }
             }
@@ -163,7 +171,10 @@ final class Traverser
         }
 
         if ($exclude !== null) {
-            $query->whereRaw($this->fragment($exclude));
+            // `exclude` is a SQL boolean fragment naming the rows to drop:
+            // wrapping it keeps rows whose fragment is NULL and stops a
+            // top-level `or` from escaping the predicate.
+            $query->whereRaw($this->fragment("not coalesce(({$exclude}), false)"));
         }
 
         return $this->collect(

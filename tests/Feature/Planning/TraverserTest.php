@@ -72,6 +72,53 @@ it('applies the window when a since date is given', function () {
     expect(collectedKeys($result, 'orders'))->toBe([2]);
 });
 
+it('applies exclude as a drop filter', function () {
+    $path = initFixtureConfig();
+    $file = $path.'/dd_test.php';
+
+    file_put_contents($file, str_replace(
+        "'window' => 'created_at',",
+        "'window' => 'created_at',\n        'exclude' => 'total >= 20',",
+        file_get_contents($file),
+    ));
+
+    $result = traverseFixture('dd_test.companies:1', $path);
+
+    expect(collectedKeys($result, 'orders'))->toBe([1]);
+});
+
+it('re-descends a table that grows through a second inbound edge', function () {
+    // Order 3 is reachable only through users: company 2 owns it, but user 10 placed it.
+    DB::connection('dd_test')->table('orders')->insert([
+        ['id' => 3, 'company_id' => 2, 'user_id' => 10, 'customer_id' => null, 'total' => 5.00, 'created_at' => '2026-02-01 00:00:00'],
+    ]);
+    DB::connection('dd_test')->table('order_items')->insert([
+        ['id' => 4, 'order_id' => 3, 'sku' => 'SKU-4'],
+    ]);
+
+    $result = traverseFixture('dd_test.companies:1');
+
+    expect(collectedKeys($result, 'orders'))->toContain(3)
+        ->and(collectedKeys($result, 'order_items'))->toContain(4);
+});
+
+it('treats a lookup root as data and seeds only its ids', function () {
+    $result = traverseFixture('dd_test.countries:1');
+
+    expect(collectedKeys($result, 'countries'))->toBe([1]);
+});
+
+it('starts from a clean repository on each traversal', function () {
+    $first = traverseFixture('dd_test.companies:1');
+    $second = traverseFixture('dd_test.companies:1');
+
+    expect(collectedKeys($second, 'orders'))->toBe([1, 2])
+        ->and(count($second->keySets()))->toBe(count($first->keySets()));
+
+    // Company 2's orders: 99 is its own, 1 is user 50's. Neither run before it leaks in.
+    expect(collectedKeys(traverseFixture('dd_test.companies:2'), 'orders'))->toBe([1, 99]);
+});
+
 it('reports a reference into a skipped table as unresolved', function () {
     $result = traverseFixture('dd_test.companies:1');
 

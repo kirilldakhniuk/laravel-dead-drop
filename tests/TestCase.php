@@ -11,8 +11,18 @@ abstract class TestCase extends Orchestra
 {
     protected function getPackageProviders($app): array
     {
-        return [
-            DeadDropServiceProvider::class,
-        ];
+        return [DeadDropServiceProvider::class];
+    }
+
+    protected function defineEnvironment($app): void
+    {
+        $app['config']->set('database.default', 'dd_test');
+        $app['config']->set('database.connections.dd_test', [
+            'driver' => 'sqlite',
+            'database' => ':memory:',
+            'prefix' => '',
+            'foreign_key_constraints' => true,
+            'use_native_json' => true,
+        ]);
     }
 }

@@ -1,0 +1,283 @@
+<?php
+
+declare(strict_types=1);
+
+namespace DeadDrop\DeadDrop\Console\Commands;
+
+use DeadDrop\DeadDrop\Config\ConfigLoader;
+use DeadDrop\DeadDrop\Config\ConfigMerger;
+use DeadDrop\DeadDrop\Config\ConfigRenderer;
+use DeadDrop\DeadDrop\Config\ConnectionConfig;
+use DeadDrop\DeadDrop\Config\Reference;
+use DeadDrop\DeadDrop\Config\TableClass;
+use DeadDrop\DeadDrop\Config\TableConfig;
+use DeadDrop\DeadDrop\Inference\EdgeInferrer;
+use DeadDrop\DeadDrop\Inference\InferredEdge;
+use DeadDrop\DeadDrop\Inference\MorphPairDetector;
+use DeadDrop\DeadDrop\Inference\SensitiveColumnDetector;
+use DeadDrop\DeadDrop\Inference\Sources\EloquentSource;
+use DeadDrop\DeadDrop\Inference\TableClassifier;
+use DeadDrop\DeadDrop\Schema\ColumnType;
+use DeadDrop\DeadDrop\Schema\DatabaseSchema;
+use DeadDrop\DeadDrop\Schema\Introspector;
+use DeadDrop\DeadDrop\Schema\Table;
+use Illuminate\Console\Command;
+
+use function Laravel\Prompts\multiselect;
+
+/**
+ * Introspects one or more connections, infers their relationships, classifies
+ * and scans their tables, and writes (or updates) a reviewed `<connection>.php`
+ * config file per connection.
+ *
+ * This command only composes the schema, inference and config layers: it
+ * decides nothing about redaction, classification or edges itself, and it
+ * never overwrites a human's prior decisions — an existing file is merged
+ * with the freshly discovered one before being re-rendered.
+ */
+final class InitCommand extends Command
+{
+    /** @var string */
+    protected $signature = 'dead-drop:init {--connection=* : Connections to enroll} {--skip=* : Tables to force to skip} {--path= : Directory for the per-connection config files (defaults to config_path(config(\'dead-drop.config_path\')))}';
+
+    /** @var string */
+    protected $description = "Discover a connection's schema and scaffold or update its DeadDrop config";
+
+    public function handle(
+        Introspector $introspector,
+        EdgeInferrer $edgeInferrer,
+        TableClassifier $classifier,
+        SensitiveColumnDetector $sensitive,
+        MorphPairDetector $morphs,
+        ConfigLoader $loader,
+        ConfigMerger $merger,
+        ConfigRenderer $renderer,
+        EloquentSource $eloquentSource,
+    ): int {
+        $connectionOption = $this->option('connection');
+        $connections = is_array($connectionOption) ? array_values(array_map('strval', $connectionOption)) : [];
+
+        $skipOption = $this->option('skip');
+        $skip = is_array($skipOption) ? array_values(array_map('strval', $skipOption)) : [];
+
+        if ($connections === []) {
+            if (! $this->input->isInteractive()) {
+                $this->error('Pass --connection=<name> (repeatable) when running without interaction.');
+
+                return self::FAILURE;
+            }
+
+            $connections = $this->promptForConnections($introspector);
+            $skip = [...$skip, ...$this->promptForSkippedTables($introspector, $connections)];
+        }
+
+        $directory = $this->directory();
+
+        if (! is_dir($directory)) {
+            mkdir($directory, 0755, true);
+        }
+
+        foreach ($connections as $connection) {
+            $schema = $introspector->inspect($connection);
+            $edges = $edgeInferrer->infer($schema);
+
+            $discovered = $this->discover($schema, $edges, $classifier, $sensitive, $morphs, $skip);
+
+            $file = "{$directory}/{$connection}.php";
+            $existing = $loader->load($connection, $directory);
+            $final = $existing === null ? $discovered : $merger->merge($existing, $discovered);
+
+            file_put_contents($file, $renderer->render($final));
+
+            $this->report($file, $final, $eloquentSource);
+        }
+
+        return self::SUCCESS;
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function promptForConnections(Introspector $introspector): array
+    {
+        $names = array_keys((array) config('database.connections'));
+
+        $options = [];
+
+        foreach ($names as $name) {
+            $name = (string) $name;
+            $tableCount = count($introspector->inspect($name)->tables);
+            $options[$name] = "{$name} ({$tableCount} tables)";
+        }
+
+        /** @var list<string> $selected */
+        $selected = multiselect(
+            label: 'Which connections should DeadDrop enroll?',
+            options: $options,
+            required: true,
+        );
+
+        return $selected;
+    }
+
+    /**
+     * @param  list<string>  $connections
+     * @return list<string>
+     */
+    private function promptForSkippedTables(Introspector $introspector, array $connections): array
+    {
+        /** @var list<array{string, string, int}> $candidates */
+        $candidates = [];
+
+        foreach ($connections as $connection) {
+            foreach ($introspector->inspect($connection)->tables as $table) {
+                $candidates[] = [$connection, $table->name, $table->estimatedRows];
+            }
+        }
+
+        usort($candidates, fn (array $a, array $b): int => $b[2] <=> $a[2]);
+
+        $options = [];
+
+        foreach (array_slice($candidates, 0, 10) as [$connection, $table, $rows]) {
+            $options["{$connection}.{$table}"] = "{$connection}.{$table} (~{$rows} rows)";
+        }
+
+        /** @var list<string> $selected */
+        $selected = multiselect(
+            label: 'Any large tables to skip?',
+            options: $options,
+        );
+
+        return $selected;
+    }
+
+    private function directory(): string
+    {
+        $path = $this->option('path');
+
+        if (is_string($path) && $path !== '') {
+            return $path;
+        }
+
+        return config_path((string) config('dead-drop.config_path'));
+    }
+
+    /**
+     * @param  array<string, InferredEdge>  $edges
+     * @param  list<string>  $skip
+     */
+    private function discover(
+        DatabaseSchema $schema,
+        array $edges,
+        TableClassifier $classifier,
+        SensitiveColumnDetector $sensitive,
+        MorphPairDetector $morphs,
+        array $skip,
+    ): ConnectionConfig {
+        $tables = [];
+
+        foreach ($schema->tables as $table) {
+            $tables[$table->name] = $this->discoverTable($schema->connection, $table, $edges, $classifier, $sensitive, $morphs, $skip);
+        }
+
+        return new ConnectionConfig($schema->connection, $tables);
+    }
+
+    /**
+     * @param  array<string, InferredEdge>  $edges
+     * @param  list<string>  $skip
+     */
+    private function discoverTable(
+        string $connection,
+        Table $table,
+        array $edges,
+        TableClassifier $classifier,
+        SensitiveColumnDetector $sensitive,
+        MorphPairDetector $morphs,
+        array $skip,
+    ): TableConfig {
+        $class = $classifier->classify($table, $edges);
+
+        if (in_array($table->name, $skip, true) || in_array("{$connection}.{$table->name}", $skip, true)) {
+            $class = TableClass::Skip;
+        }
+
+        if ($class === TableClass::Skip) {
+            return new TableConfig(
+                name: $table->name,
+                class: TableClass::Skip,
+                columns: array_values($table->columnNames()),
+                references: [],
+                redact: [],
+                window: null,
+                exclude: null,
+                morph: null,
+            );
+        }
+
+        $references = [];
+
+        foreach ($edges as $edge) {
+            if ($edge->table === $table->name) {
+                $references[$edge->column] = new Reference(null, $edge->targetTable, $edge->targetColumn, $edge->descend, $edge->source);
+            }
+        }
+
+        $redact = $sensitive->detect($table);
+
+        foreach ($sensitive->needsReview($table) as $column) {
+            $columnMeta = $table->column($column);
+
+            if ($columnMeta !== null && $columnMeta->type === ColumnType::Json) {
+                $redact[$column] ??= 'review';
+            }
+        }
+
+        return new TableConfig(
+            name: $table->name,
+            class: $class,
+            columns: array_values($table->columnNames()),
+            references: $references,
+            redact: $redact,
+            window: $table->column('created_at') !== null ? 'created_at' : null,
+            exclude: null,
+            morph: $morphs->detect($table),
+        );
+    }
+
+    private function report(string $file, ConnectionConfig $config, EloquentSource $eloquentSource): void
+    {
+        $this->info("Wrote {$file}");
+
+        $data = 0;
+        $lookup = 0;
+        $skip = 0;
+
+        foreach ($config->tables as $table) {
+            match ($table->class) {
+                TableClass::Data => $data++,
+                TableClass::Lookup => $lookup++,
+                TableClass::Skip => $skip++,
+            };
+        }
+
+        $this->line("data: {$data}, lookup: {$lookup}, skip: {$skip}");
+
+        if ($eloquentSource->skipped() !== []) {
+            $this->line('Skipped model methods without a relation return type:');
+
+            foreach ($eloquentSource->skipped() as $method) {
+                $this->line("  - {$method}");
+            }
+        }
+
+        if ($eloquentSource->failed() !== []) {
+            $this->line('Model methods that threw during inference:');
+
+            foreach ($eloquentSource->failed() as $method) {
+                $this->line("  - {$method}");
+            }
+        }
+    }
+}

@@ -15,3 +15,13 @@ function tempDirectory(): string
 
     return $directory;
 }
+
+function initFixtureConfig(): string
+{
+    $path = tempDirectory();
+
+    test()->artisan('dead-drop:init', ['--connection' => ['dd_test'], '--path' => $path, '--no-interaction' => true])
+        ->assertSuccessful();
+
+    return $path;
+}

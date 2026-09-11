@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace DeadDrop\DeadDrop;
 
+use DeadDrop\DeadDrop\Console\Commands\InitCommand;
 use DeadDrop\DeadDrop\Inference\Sources\EloquentSource;
 use Illuminate\Contracts\Foundation\Application;
 use Illuminate\Support\ServiceProvider;
@@ -14,7 +15,7 @@ class DeadDropServiceProvider extends ServiceProvider
     {
         $this->mergeConfigFrom(__DIR__.'/../config/dead-drop.php', 'dead-drop');
 
-        $this->app->bind(EloquentSource::class, fn (Application $app): EloquentSource => new EloquentSource(
+        $this->app->singleton(EloquentSource::class, fn (Application $app): EloquentSource => new EloquentSource(
             array_values(array_map(
                 fn (string $path): string => $app->basePath($path),
                 (array) $app->make('config')->get('dead-drop.model_paths', []),
@@ -31,5 +32,9 @@ class DeadDropServiceProvider extends ServiceProvider
         $this->publishes([
             __DIR__.'/../config/dead-drop.php' => config_path('dead-drop.php'),
         ], ['dead-drop', 'dead-drop-config']);
+
+        $this->commands([
+            InitCommand::class,
+        ]);
     }
 }

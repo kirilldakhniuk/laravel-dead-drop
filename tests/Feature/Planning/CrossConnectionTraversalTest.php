@@ -5,7 +5,10 @@ declare(strict_types=1);
 use DeadDrop\DeadDrop\Config\ConfigLoader;
 use DeadDrop\DeadDrop\Planning\CircularConnectionException;
 use DeadDrop\DeadDrop\Planning\Graph;
+use DeadDrop\DeadDrop\Planning\KeySetRepository;
+use DeadDrop\DeadDrop\Schema\ColumnType;
 use DeadDrop\DeadDrop\Tests\Fixtures\SchemaBuilder;
+use Illuminate\Database\QueryException;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 
@@ -51,6 +54,54 @@ it('collects rows on a second connection via a qualified edge', function () {
     $result = traverseFixture('dd_test.companies:1', crossConnectionConfigDirectory());
 
     expect(collectedKeys($result, 'analytics_sessions', 'dd_analytics'))->toBe([1, 2]);
+});
+
+it('collects cross-connection children added after the parent grew', function () {
+    $path = crossConnectionConfigDirectory();
+
+    DB::connection('dd_analytics')->table('analytics_sessions')->insert([
+        ['id' => 3, 'company_id' => 2],
+    ]);
+
+    $result = traverseFixture('dd_test.companies:1,2', $path);
+
+    expect(collectedKeys($result, 'analytics_sessions', 'dd_analytics'))->toBe([1, 2, 3, 9]);
+});
+
+it('refreshes a mirror when the source key set grows', function () {
+    $repository = app(KeySetRepository::class);
+
+    $source = $repository->create('dd_test', 'companies', ColumnType::Integer);
+    $source->add([1]);
+
+    $mirror = $repository->mirror($source, 'dd_analytics');
+
+    expect($mirror->count())->toBe(1);
+
+    $source->add([2]);
+    $refreshed = $repository->mirror($source, 'dd_analytics');
+
+    expect($refreshed->count())->toBe(2)
+        ->and($refreshed->tableName)->toBe($mirror->tableName);
+
+    $repository->dropAll();
+});
+
+it('keeps mirrors out of the key set listing but drops them with dropAll', function () {
+    $repository = app(KeySetRepository::class);
+
+    $source = $repository->create('dd_test', 'companies', ColumnType::Integer);
+    $source->add([1]);
+    $mirror = $repository->mirror($source, 'dd_analytics');
+
+    expect(array_keys($repository->all()))->toBe(['dd_test.companies']);
+
+    $repository->dropAll();
+
+    // SQLite lists temporary tables under the `temp` schema, so the tables are
+    // asked for directly rather than through the schema builder.
+    expect(fn () => DB::connection('dd_test')->table($source->tableName)->count())->toThrow(QueryException::class)
+        ->and(fn () => DB::connection('dd_analytics')->table($mirror->tableName)->count())->toThrow(QueryException::class);
 });
 
 it('orders connections so targets come before the connections that point at them', function () {

@@ -47,13 +47,17 @@ final class KeySetRepository
      * connections has something to join against. The source keeps growing
      * while the traversal runs, so every call refreshes the mirror: the keys
      * travel in chunks and the ones already there are ignored.
+     *
+     * The table name carries a hash of the source rather than its connection
+     * name: both names can contain underscores, and joining them would let two
+     * different sources claim one table — which `make()` would silently reuse.
      */
     public function mirror(KeySet $source, string $targetConnection): KeySet
     {
         $mirror = $this->mirrors["{$targetConnection}:{$source->connection}.{$source->table}"] ??= $this->make(
             $targetConnection,
             $source->table,
-            "dd_keys_mirror_{$source->connection}_{$source->table}",
+            'dd_keys_mirror_'.$source->table.'_'.hash('crc32b', "{$source->connection}.{$source->table}"),
             $source->type,
         );
 

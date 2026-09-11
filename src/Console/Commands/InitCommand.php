@@ -71,10 +71,22 @@ final class InitCommand extends Command
             $skip = [...$skip, ...$this->promptForSkippedTables($introspector, $connections)];
         }
 
+        $knownConnections = array_keys((array) config('database.connections'));
+
+        foreach ($connections as $connection) {
+            if (! in_array($connection, $knownConnections, true)) {
+                $this->error("Unknown database connection [{$connection}].");
+
+                return self::FAILURE;
+            }
+        }
+
         $directory = $this->directory();
 
-        if (! is_dir($directory)) {
-            mkdir($directory, 0755, true);
+        if (! is_dir($directory) && ! @mkdir($directory, 0755, true) && ! is_dir($directory)) {
+            $this->error("Could not create directory [{$directory}].");
+
+            return self::FAILURE;
         }
 
         foreach ($connections as $connection) {
@@ -87,7 +99,11 @@ final class InitCommand extends Command
             $existing = $loader->load($connection, $directory);
             $final = $existing === null ? $discovered : $merger->merge($existing, $discovered);
 
-            file_put_contents($file, $renderer->render($final));
+            if (@file_put_contents($file, $renderer->render($final)) === false) {
+                $this->error("Could not write [{$file}].");
+
+                return self::FAILURE;
+            }
 
             $this->report($file, $final, $eloquentSource);
         }

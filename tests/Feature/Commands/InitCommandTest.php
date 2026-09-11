@@ -58,3 +58,22 @@ it('preserves a human edit when re-run', function () {
 it('fails without a connection when non-interactive', function () {
     $this->artisan('dead-drop:init', ['--no-interaction' => true])->assertFailed();
 });
+
+it('fails with a clear message for an unknown connection', function () {
+    $path = tempDirectory();
+
+    $this->artisan('dead-drop:init', ['--connection' => ['nope'], '--path' => $path, '--no-interaction' => true])
+        ->expectsOutputToContain('Unknown database connection [nope]')
+        ->assertFailed();
+
+    expect($path.'/nope.php')->not->toBeFile();
+});
+
+it('fails when the config directory cannot be created', function () {
+    $blocker = tempDirectory().'/blocker';
+    file_put_contents($blocker, '');
+
+    $this->artisan('dead-drop:init', ['--connection' => ['dd_test'], '--path' => $blocker.'/nested', '--no-interaction' => true])
+        ->expectsOutputToContain('Could not create directory')
+        ->assertFailed();
+});

@@ -1407,6 +1407,7 @@ return [
 - Tables sort alphabetically; keys appear in the fixed order `class`, `removed` (only when true), `window`, `exclude`, `morph`, `columns`, `references`, `redact`; null/empty keys are omitted (`columns` is always present). `columns` keep schema order; `references` and `redact` entries sort alphabetically by column name.
 - A reference is always rendered in array form with its `source`, and `'descend' => false` only when false. A connection-qualified target renders as `'dd_test.companies.id'`. The renderer emits **no comments**: the source is data the merger needs back, and comments cannot be parsed.
 - Strings are single-quoted with `\\` and `\'` escaped; four-space indentation; trailing commas everywhere.
+- `TableConfig::toArray()` / `ConnectionConfig::toArray()` are the single source of truth for key order and sorting; the renderer only formats their output and has no per-class special cases (a human-typed reference on a skip table is rendered, never dropped).
 
 **This is the most important task in the plan.** `ConfigMerger` is what makes the package survive schema churn. Its contract:
 
@@ -1643,7 +1644,7 @@ git commit -m "feat: render, load and merge table configs"
 - Produces: signature
   `dead-drop:init {--connection=* : Connections to enroll} {--skip=* : Tables to force to skip} {--path= : Directory for the per-connection config files (defaults to config_path(config('dead-drop.config_path')))}`
 
-**Discovered config per table:** `class` from the classifier (forced to `skip` when named in `--skip`); `columns` from the schema; `references` from every inferred edge whose `table` is this table (target connection null); `redact` from `SensitiveColumnDetector::detect()` plus `'review'` for every JSON column (from `needsReview()`, excluding morph type columns); `morph` from `MorphPairDetector::detect()`; `window` = `created_at` when the table has such a column, else null; `exclude` null. Skip-class tables render only `class` and `columns`.
+**Discovered config per table:** `class` from the classifier (forced to `skip` when named in `--skip`); `columns` from the schema; `references` from every inferred edge whose `table` is this table (target connection null); `redact` from `SensitiveColumnDetector::detect()` plus `'review'` for every JSON column (from `needsReview()`, excluding morph type columns); `morph` from `MorphPairDetector::detect()`; `window` = `created_at` when the table has such a column, else null; `exclude` null. For skip-class tables init builds the discovered `TableConfig` with empty `references`/`redact` and null `window`/`exclude`/`morph`, so a fresh skip table renders as only `class` and `columns` (the renderer itself has no per-class special case, so anything a human typed on a skip table is preserved).
 
 Interactive mode (only when `--connection` is empty **and** the input is interactive): `multiselect()` from Laravel Prompts over `array_keys(config('database.connections'))`, each labelled with its table count, then `multiselect()` over the ten largest tables by estimated rows to add to the skip list. With `--no-interaction` both prompts are skipped; `--connection` is then required and the command prints an error and returns `self::FAILURE` without it.
 

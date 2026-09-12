@@ -14,6 +14,7 @@ use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\Storage;
 use InvalidArgumentException;
 use RuntimeException;
+use Throwable;
 
 use function Laravel\Prompts\confirm;
 
@@ -43,7 +44,7 @@ final class PullCommand extends Command
         if (! $this->laravel->environment($allowed)) {
             $environment = (string) $this->laravel->environment();
 
-            $this->error("dead-drop:pull refuses to run in the [{$environment}] environment; allowed: ".implode(', ', $allowed));
+            $this->error("dead-drop:pull refuses to run in the [{$environment}] environment; allowed: ".($allowed === [] ? 'none' : implode(', ', $allowed)));
 
             return self::FAILURE;
         }
@@ -88,17 +89,27 @@ final class PullCommand extends Command
             return self::FAILURE;
         }
 
+        // The target has already been replaced by the time the hooks run, so
+        // the summary is printed first: whatever a hook does next, the
+        // operator can see what is now in their database.
+        $this->summarise($report, $manifest->id);
+
         if (! $this->after($report)) {
+            $this->error('The artifact was loaded; only the after hook failed.');
+
             return self::FAILURE;
         }
 
-        $this->info("Loaded {$report->totalRows()} rows into ".count($report->loaded)." tables from artifact [{$manifest->id}].");
+        return self::SUCCESS;
+    }
+
+    private function summarise(PullReport $report, string $id): void
+    {
+        $this->info("Loaded {$report->totalRows()} rows into ".count($report->loaded)." tables from artifact [{$id}].");
 
         foreach ($report->skipped as $skipped) {
             $this->warn("  {$skipped}");
         }
-
-        return self::SUCCESS;
     }
 
     /**
@@ -157,21 +168,16 @@ final class PullCommand extends Command
                 continue;
             }
 
-            if (class_exists($entry)) {
-                $hook = $this->laravel->make($entry);
+            try {
+                $exit = $this->invoke($entry, $report);
+            } catch (Throwable $e) {
+                // A misspelled entry reaches Artisan as a command name, a hook
+                // class can fail to resolve, and a hook can throw anything at
+                // all; none of that is worth a stack trace.
+                $this->error("After hook [{$entry}] failed: {$e->getMessage()}");
 
-                if (! is_callable($hook)) {
-                    $this->error("After hook [{$entry}] is not invokable.");
-
-                    return false;
-                }
-
-                $hook($report);
-
-                continue;
+                return false;
             }
-
-            $exit = Artisan::call($entry);
 
             if ($exit !== 0) {
                 $this->error("After hook [{$entry}] exited with {$exit}.");
@@ -181,6 +187,31 @@ final class PullCommand extends Command
         }
 
         return true;
+    }
+
+    /**
+     * Runs one hook and reports its exit code: a class-string is resolved from
+     * the container and invoked with the report, anything else is an Artisan
+     * command, which writes to this command's output rather than into a buffer
+     * nobody reads.
+     *
+     * @throws Throwable when the hook cannot be resolved, is not invokable, or throws
+     */
+    private function invoke(string $entry, PullReport $report): int
+    {
+        if (! class_exists($entry)) {
+            return Artisan::call($entry, [], $this->output);
+        }
+
+        $hook = $this->laravel->make($entry);
+
+        if (! is_callable($hook)) {
+            throw new RuntimeException('the resolved instance is not invokable.');
+        }
+
+        $hook($report);
+
+        return 0;
     }
 
     private function target(): string

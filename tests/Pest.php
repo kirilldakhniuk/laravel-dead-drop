@@ -44,6 +44,14 @@ function initFixtureConfig(): string
 }
 
 /**
+ * The id of the newest artifact on the faked disk.
+ */
+function latestArtifactId(): string
+{
+    return (new ArtifactReader(Storage::disk('local'), 'dead-drops'))->ids()[0];
+}
+
+/**
  * Runs a real (non dry-run) dump of the fixture connection and returns the id
  * of the artifact it wrote. The caller must have called `fakeArtifactDisk()`.
  */
@@ -54,15 +62,7 @@ function dumpFixture(string $root = 'dd_test.companies:1', ?string $configDirect
     test()->artisan('dead-drop:dump', ['--root' => $root, '--path' => $directory, '--disk' => 'local'])
         ->assertSuccessful();
 
-    return (new ArtifactReader(Storage::disk('local'), 'dead-drops'))->ids()[0];
-}
-
-/**
- * The id of the newest artifact on the faked disk.
- */
-function latestArtifactId(): string
-{
-    return (new ArtifactReader(Storage::disk('local'), 'dead-drops'))->ids()[0];
+    return latestArtifactId();
 }
 
 function traverseFixture(string $rootSpec, ?string $configDirectory = null, ?DateTimeInterface $since = null): TraversalResult

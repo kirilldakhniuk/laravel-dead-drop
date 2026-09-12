@@ -72,6 +72,42 @@ it('runs the configured after hooks with the report', function () {
     expect(RecordingAfterHook::$report?->loaded['dd_test.orders'])->toBe(2);
 });
 
+it('runs an artisan command after hook and streams its output', function () {
+    $id = dumpFixture('dd_test.companies:1', initFixtureConfig());
+    config()->set('dead-drop.pull.after', ['dead-drop:dumps --disk=local']);
+
+    // `Root` is a column header only `dead-drop:dumps` prints, so seeing it
+    // proves the hook ran and wrote through this command's output.
+    $this->artisan('dead-drop:pull', ['--connection' => 'dd_target', '--disk' => 'local', '--force' => true])
+        ->expectsOutputToContain($id)
+        ->expectsOutputToContain('Root')
+        ->assertSuccessful();
+});
+
+it('fails clearly when an after hook cannot be resolved', function () {
+    dumpFixture('dd_test.companies:1', initFixtureConfig());
+    config()->set('dead-drop.pull.after', ['App\\Hooks\\Missing']);
+
+    // The rows are already in the target, so the summary has to be on screen
+    // before the hook failure is reported.
+    $this->artisan('dead-drop:pull', ['--connection' => 'dd_target', '--disk' => 'local', '--force' => true])
+        ->expectsOutputToContain('Loaded')
+        ->expectsOutputToContain('After hook [App\\Hooks\\Missing] failed:')
+        ->expectsOutputToContain('The artifact was loaded; only the after hook failed.')
+        ->assertFailed();
+
+    expect(DB::connection('dd_target')->table('orders')->count())->toBe(2);
+});
+
+it('skips the prompt with --no-interaction', function () {
+    dumpFixture('dd_test.companies:1', initFixtureConfig());
+
+    $this->artisan('dead-drop:pull', ['--connection' => 'dd_target', '--disk' => 'local', '--no-interaction' => true])
+        ->assertSuccessful();
+
+    expect(DB::connection('dd_target')->table('orders')->count())->toBe(2);
+});
+
 it('refuses an unknown target connection', function () {
     dumpFixture('dd_test.companies:1', initFixtureConfig());
 

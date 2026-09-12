@@ -22,7 +22,7 @@ final class TransformerFactory
         [$name, $argument] = array_pad(explode(':', $spec, 2), 2, null);
 
         return match ($name) {
-            'hash' => new HashTransformer($context->salt, $this->declaredLength($column), $this->isEmailColumn($column) ? $context->emailDomain : null),
+            'hash' => new HashTransformer($context->salt, $column->type === ColumnType::String ? $this->declaredLength($column) : null, $this->isEmailColumn($column) ? $context->emailDomain : null),
             'mask' => new MaskTransformer,
             'null' => new NullTransformer,
             'scramble' => $column->type === ColumnType::DateTime

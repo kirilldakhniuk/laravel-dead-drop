@@ -81,6 +81,7 @@ final class DumpCommand extends Command
         }
 
         $dryRun = $this->option('dry-run') === true;
+        $phase = 'Planning';
 
         try {
             $schemas = $this->schemas($config, $introspector);
@@ -100,7 +101,12 @@ final class DumpCommand extends Command
                 return self::FAILURE;
             }
 
-            $manifest = $dryRun ? null : $this->extract($builder, $plan, $root, $since, $config, $schemas);
+            $manifest = null;
+
+            if (! $dryRun) {
+                $phase = 'Extraction';
+                $manifest = $this->extract($builder, $plan, $root, $since, $config, $schemas);
+            }
         } catch (UnsupportedTableException|CircularConnectionException|InvalidArgumentException $e) {
             $this->error($e->getMessage());
 
@@ -108,8 +114,9 @@ final class DumpCommand extends Command
         } catch (QueryException $e) {
             // A hand-written `exclude` fragment or a window column that is not
             // one reaches the database as-is; the operator gets the engine's
-            // complaint rather than a stack trace.
-            $this->error("Planning failed: {$e->getMessage()}");
+            // complaint rather than a stack trace, and the phase that produced
+            // it rather than a guess.
+            $this->error("{$phase} failed: {$e->getMessage()}");
 
             return self::FAILURE;
         } catch (RuntimeException $e) {

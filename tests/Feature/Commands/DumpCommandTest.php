@@ -73,6 +73,8 @@ it('refuses an executor that does not support the source driver', function () {
     $this->artisan('dead-drop:dump', ['--root' => 'dd_test.companies:1', '--path' => $path, '--disk' => 'local'])
         ->expectsOutputToContain('does not support the sqlite driver')
         ->assertFailed();
+
+    expect(Storage::disk('local')->allFiles())->toBe([]);
 });
 
 it('leaves no key tables behind after a real dump', function () {

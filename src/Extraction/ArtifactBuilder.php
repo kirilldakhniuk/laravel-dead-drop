@@ -109,6 +109,13 @@ final class ArtifactBuilder
             }
 
             $keys = $step->keyTable === null ? null : $this->keys->get($step->connection, $step->table);
+
+            // A null key set means "the whole table" to an executor, so a step
+            // that planned one and lost it would silently widen the dump past
+            // what the traversal collected.
+            if ($step->keyTable !== null && $keys === null) {
+                throw new RuntimeException("No key set for table [{$step->connection}.{$step->table}].");
+            }
             $redactor = Redactor::forTable($tableConfig, $table, $context);
             $artifact = $executor->export($step, $table, $tableConfig, $keys, $redactor, $writer);
 

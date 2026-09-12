@@ -92,9 +92,17 @@ final class ArtifactReader
                 throw new RuntimeException("Unable to open a temporary file at [{$tempPath}].");
             }
 
-            stream_copy_to_stream($stream, $handle);
+            $copied = stream_copy_to_stream($stream, $handle);
             fclose($handle);
             fclose($stream);
+
+            if ($copied === false) {
+                throw new RuntimeException("Could not read artifact file [{$path}].");
+            }
+
+            if ($table->bytes > 0 && $copied !== $table->bytes) {
+                throw new RuntimeException("Artifact file [{$path}] is {$copied} bytes but the manifest says {$table->bytes}.");
+            }
 
             $gz = gzopen($tempPath, 'rb');
 

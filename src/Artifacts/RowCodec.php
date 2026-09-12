@@ -28,7 +28,7 @@ final class RowCodec
             $type = $types[$column] ?? null;
 
             $encoded[$column] = $type === ColumnType::Binary && $value !== null
-                ? ['__base64' => base64_encode((string) $value)]
+                ? ['__base64' => base64_encode($this->binaryString($value))]
                 : $value;
         }
 
@@ -82,9 +82,48 @@ final class RowCodec
 
         return match ($type) {
             ColumnType::Integer => (int) $value,
-            ColumnType::Boolean => (bool) $value,
+            ColumnType::Boolean => $this->decodeBoolean($value),
             ColumnType::Decimal => (string) $value,
             default => $value,
         };
+    }
+
+    /**
+     * PDO drivers (notably Postgres) can hand back boolean columns as the
+     * strings `t`/`f` rather than native booleans, and `(bool) 'f'` is
+     * `true` — so string values get their own truth table instead of a
+     * plain cast.
+     */
+    private function decodeBoolean(mixed $value): bool
+    {
+        if (is_string($value)) {
+            return match (strtolower($value)) {
+                'f', 'false', '0', '' => false,
+                't', 'true', '1' => true,
+                default => (bool) $value,
+            };
+        }
+
+        return (bool) $value;
+    }
+
+    /**
+     * A binary column's value can arrive as a stream (some PDO drivers hand
+     * back BLOB/bytea columns as resources rather than strings), so it is
+     * read to completion before it is base64-encoded.
+     */
+    private function binaryString(mixed $value): string
+    {
+        if (is_resource($value)) {
+            $contents = stream_get_contents($value);
+
+            if ($contents === false) {
+                throw new RuntimeException('Malformed artifact row: unable to read a binary stream.');
+            }
+
+            return $contents;
+        }
+
+        return (string) $value;
     }
 }

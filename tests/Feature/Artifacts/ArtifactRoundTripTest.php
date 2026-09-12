@@ -5,6 +5,7 @@ declare(strict_types=1);
 use DeadDrop\DeadDrop\Artifacts\ArtifactReader;
 use DeadDrop\DeadDrop\Artifacts\ArtifactWriter;
 use DeadDrop\DeadDrop\Artifacts\Manifest;
+use DeadDrop\DeadDrop\Artifacts\RowCodec;
 use DeadDrop\DeadDrop\Artifacts\TableManifest;
 use DeadDrop\DeadDrop\Schema\ColumnType;
 use Illuminate\Support\Facades\Storage;
@@ -70,4 +71,53 @@ it('lists ids newest first and finds the latest complete manifest', function () 
 
 it('returns null when no complete artifact exists', function () {
     expect((new ArtifactReader(Storage::disk('local'), 'dead-drops'))->latestComplete())->toBeNull();
+});
+
+it('removes its staging file when aborted before finish', function () {
+    $before = glob(sys_get_temp_dir().'/dead-drop-*') ?: [];
+
+    $writer = new ArtifactWriter(Storage::disk('local'), 'dead-drops', '20260912-141500-dddddd');
+    $file = $writer->table('dd_test.things.ndjson.gz', ['id' => ColumnType::Integer]);
+    $file->append(['id' => 1]);
+    $file->abort();
+
+    $after = glob(sys_get_temp_dir().'/dead-drop-*') ?: [];
+
+    expect($after)->toBe($before)
+        ->and(Storage::disk('local')->exists('dead-drops/20260912-141500-dddddd/dd_test.things.ndjson.gz'))->toBeFalse();
+});
+
+it('throws when the copied bytes do not match the manifest', function () {
+    $manifest = writeSampleArtifact('20260912-141500-aaaaaa');
+    $reader = new ArtifactReader(Storage::disk('local'), 'dead-drops');
+    $file = 'dead-drops/20260912-141500-aaaaaa/dd_test.things.ndjson.gz';
+    $disk = Storage::disk('local');
+
+    $disk->put($file, substr((string) $disk->get($file), 0, 10));
+
+    expect(fn () => iterator_to_array($reader->rows($manifest->id, $manifest->tables[0])))
+        ->toThrow(RuntimeException::class, 'bytes');
+});
+
+it('decodes postgres style boolean strings', function () {
+    $codec = new RowCodec;
+    $types = ['ok' => ColumnType::Boolean];
+
+    $true = $codec->decode($codec->encode(['ok' => 't'], $types), $types);
+    $false = $codec->decode($codec->encode(['ok' => 'f'], $types), $types);
+
+    expect($true['ok'])->toBeTrue()
+        ->and($false['ok'])->toBeFalse();
+});
+
+it('reads a binary value from a stream before encoding it', function () {
+    $codec = new RowCodec;
+    $types = ['blob' => ColumnType::Binary];
+    $stream = fopen('php://memory', 'r+');
+    fwrite($stream, "\x00\xff");
+    rewind($stream);
+
+    $decoded = $codec->decode($codec->encode(['blob' => $stream], $types), $types);
+
+    expect($decoded['blob'])->toBe("\x00\xff");
 });

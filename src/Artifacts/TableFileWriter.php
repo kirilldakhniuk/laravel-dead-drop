@@ -17,6 +17,8 @@ final class TableFileWriter
 {
     private int $rows = 0;
 
+    private bool $finished = false;
+
     private readonly RowCodec $codec;
 
     /**
@@ -82,6 +84,36 @@ final class TableFileWriter
             if (is_file($this->tempPath)) {
                 unlink($this->tempPath);
             }
+
+            $this->finished = true;
         }
+    }
+
+    /**
+     * Releases the staging gzip handle and deletes the local temp file
+     * without uploading anything, for a writer that will never call
+     * `finish()` (an aborted dump, or an exception mid-table). Safe to call
+     * more than once, and safe to call after `finish()` already ran.
+     */
+    public function abort(): void
+    {
+        if ($this->finished) {
+            return;
+        }
+
+        $this->finished = true;
+
+        if (is_resource($this->handle)) {
+            gzclose($this->handle);
+        }
+
+        if (is_file($this->tempPath)) {
+            unlink($this->tempPath);
+        }
+    }
+
+    public function __destruct()
+    {
+        $this->abort();
     }
 }

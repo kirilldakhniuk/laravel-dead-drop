@@ -6,6 +6,7 @@ namespace DeadDrop\DeadDrop;
 
 use DeadDrop\DeadDrop\Console\Commands\CheckCommand;
 use DeadDrop\DeadDrop\Console\Commands\DumpCommand;
+use DeadDrop\DeadDrop\Console\Commands\DumpsCommand;
 use DeadDrop\DeadDrop\Console\Commands\InitCommand;
 use DeadDrop\DeadDrop\Extraction\ExecutorManager;
 use DeadDrop\DeadDrop\Inference\Sources\EloquentSource;
@@ -45,6 +46,7 @@ class DeadDropServiceProvider extends ServiceProvider
             InitCommand::class,
             CheckCommand::class,
             DumpCommand::class,
+            DumpsCommand::class,
         ]);
     }
 }

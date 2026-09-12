@@ -62,11 +62,11 @@ it('refuses a table with a composite primary key', function () {
         ->assertFailed();
 });
 
-it('refuses to extract without dry-run in this phase', function () {
+it('still refuses --full', function () {
     $path = initFixtureConfig();
 
-    $this->artisan('dead-drop:dump', ['--root' => 'dd_test.companies:1', '--path' => $path])
-        ->expectsOutputToContain('not implemented')
+    $this->artisan('dead-drop:dump', ['--root' => 'dd_test.companies:1', '--path' => $path, '--full' => true])
+        ->expectsOutputToContain('--full is not implemented yet')
         ->assertFailed();
 });
 

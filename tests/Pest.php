@@ -2,6 +2,7 @@
 
 declare(strict_types=1);
 
+use DeadDrop\DeadDrop\Artifacts\ArtifactReader;
 use DeadDrop\DeadDrop\Config\ConfigLoader;
 use DeadDrop\DeadDrop\Planning\Root;
 use DeadDrop\DeadDrop\Planning\TraversalResult;
@@ -40,6 +41,20 @@ function initFixtureConfig(): string
         ->assertSuccessful();
 
     return $path;
+}
+
+/**
+ * Runs a real (non dry-run) dump of the fixture connection and returns the id
+ * of the artifact it wrote. The caller must have called `fakeArtifactDisk()`.
+ */
+function dumpFixture(string $root = 'dd_test.companies:1', ?string $configDirectory = null): string
+{
+    $directory = $configDirectory ?? initFixtureConfig();
+
+    test()->artisan('dead-drop:dump', ['--root' => $root, '--path' => $directory, '--disk' => 'local'])
+        ->assertSuccessful();
+
+    return (new ArtifactReader(Storage::disk('local'), 'dead-drops'))->ids()[0];
 }
 
 function traverseFixture(string $rootSpec, ?string $configDirectory = null, ?DateTimeInterface $since = null): TraversalResult

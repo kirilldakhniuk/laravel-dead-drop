@@ -6,9 +6,13 @@ namespace DeadDrop\DeadDrop\Console\Commands;
 
 use DateMalformedStringException;
 use DateTimeImmutable;
+use DeadDrop\DeadDrop\Artifacts\Manifest;
 use DeadDrop\DeadDrop\Config\ConfigLoader;
 use DeadDrop\DeadDrop\Config\ConfigSet;
+use DeadDrop\DeadDrop\Console\Commands\Concerns\FormatsBytes;
+use DeadDrop\DeadDrop\Extraction\ArtifactBuilder;
 use DeadDrop\DeadDrop\Extraction\ExtractionGate;
+use DeadDrop\DeadDrop\Extraction\TableArtifact;
 use DeadDrop\DeadDrop\Planning\CircularConnectionException;
 use DeadDrop\DeadDrop\Planning\ExtractionPlan;
 use DeadDrop\DeadDrop\Planning\KeySetRepository;
@@ -16,39 +20,38 @@ use DeadDrop\DeadDrop\Planning\Planner;
 use DeadDrop\DeadDrop\Planning\PlanStep;
 use DeadDrop\DeadDrop\Planning\Root;
 use DeadDrop\DeadDrop\Planning\UnsupportedTableException;
+use DeadDrop\DeadDrop\Redaction\RedactionContext;
 use DeadDrop\DeadDrop\Schema\DatabaseSchema;
 use DeadDrop\DeadDrop\Schema\Introspector;
 use DeadDrop\DeadDrop\Schema\SchemaSet;
 use Illuminate\Console\Command;
 use Illuminate\Database\QueryException;
+use Illuminate\Support\Facades\Storage;
 use InvalidArgumentException;
+use RuntimeException;
 
 /**
- * Plans the dump of a root row set: how many rows each table contributes, how
- * big that is, and which references the plan could not follow.
+ * Dumps a root row set: it plans what the dump contains, puts that plan past
+ * the extraction gate, and — unless `--dry-run` — hands it to the executor
+ * that writes the redacted artifact.
  *
- * Only `--dry-run` is supported in this phase. The command composes the
- * config, schema and planning layers and prints what they answer; it decides
- * nothing about the plan itself.
+ * The command composes the config, schema, planning and extraction layers and
+ * prints what they answer; it decides nothing about the plan itself.
  */
 final class DumpCommand extends Command
 {
-    /** @var string */
-    protected $signature = 'dead-drop:dump {--root= : Root spec, e.g. mysql.companies:1,2} {--full : Dump every configured table whole} {--since= : Only rows on or after this date for windowed tables} {--connection=* : Limit to these connections} {--path= : Config directory} {--dry-run : Plan only, extract nothing}';
+    use FormatsBytes;
 
     /** @var string */
-    protected $description = 'Plan the dump of a root row set and report what it would extract';
+    protected $signature = 'dead-drop:dump {--root= : Root spec, e.g. mysql.companies:1,2} {--full : Dump every configured table whole} {--since= : Only rows on or after this date for windowed tables} {--connection=* : Limit to these connections} {--path= : Config directory} {--disk= : Disk to write the artifact to (defaults to dead-drop.disk)} {--dry-run : Plan only, extract nothing}';
 
-    public function handle(Planner $planner, ConfigLoader $loader, Introspector $introspector, KeySetRepository $keys, ExtractionGate $gate): int
+    /** @var string */
+    protected $description = 'Dump a redacted, referentially complete slice of a root row set';
+
+    public function handle(Planner $planner, ConfigLoader $loader, Introspector $introspector, KeySetRepository $keys, ExtractionGate $gate, ArtifactBuilder $builder): int
     {
         if ($this->option('full') === true) {
             $this->error('--full is not implemented yet');
-
-            return self::FAILURE;
-        }
-
-        if ($this->option('dry-run') !== true) {
-            $this->error('extraction is not implemented yet (phase 4)');
 
             return self::FAILURE;
         }
@@ -77,19 +80,27 @@ final class DumpCommand extends Command
             return self::FAILURE;
         }
 
+        $dryRun = $this->option('dry-run') === true;
+
         try {
             $schemas = $this->schemas($config, $introspector);
             $plan = $planner->plan($root, $config, $schemas, $since);
 
-            $rootIdViolations = $gate->rootIds($root, $config, $schemas);
+            // A dry run reads nothing out of the tables it plans, so only the
+            // root ids have to hold; an extraction has to clear the whole gate.
+            $violations = $dryRun
+                ? $gate->rootIds($root, $config, $schemas)
+                : $gate->check($root, $config, $schemas, $this->salt())->lines();
 
-            if ($rootIdViolations !== []) {
-                foreach ($rootIdViolations as $violation) {
+            if ($violations !== []) {
+                foreach ($violations as $violation) {
                     $this->error($violation);
                 }
 
                 return self::FAILURE;
             }
+
+            $manifest = $dryRun ? null : $this->extract($builder, $plan, $root, $since, $config, $schemas);
         } catch (UnsupportedTableException|CircularConnectionException|InvalidArgumentException $e) {
             $this->error($e->getMessage());
 
@@ -101,15 +112,46 @@ final class DumpCommand extends Command
             $this->error("Planning failed: {$e->getMessage()}");
 
             return self::FAILURE;
+        } catch (RuntimeException $e) {
+            $this->error($e->getMessage());
+
+            return self::FAILURE;
         } finally {
-            // The plan is read out of temporary key tables, so they outlive
-            // the traversal and only the caller can clean them up.
+            // The plan is read out of temporary key tables, and the extraction
+            // joins them, so they outlive both and only the caller can clean
+            // them up.
             $keys->dropAll();
         }
 
         $this->report($plan);
 
+        if ($manifest !== null) {
+            $this->info("Artifact: {$this->disk()}:{$this->basePath()}/{$manifest->id}");
+        }
+
         return self::SUCCESS;
+    }
+
+    private function extract(ArtifactBuilder $builder, ExtractionPlan $plan, Root $root, ?DateTimeImmutable $since, ConfigSet $config, SchemaSet $schemas): Manifest
+    {
+        $context = new RedactionContext(
+            (string) config('dead-drop.redaction.salt'),
+            (string) config('dead-drop.redaction.email_domain'),
+        );
+
+        return $builder->build(
+            $plan,
+            $root,
+            $since,
+            $config,
+            $schemas,
+            $context,
+            Storage::disk($this->disk()),
+            $this->basePath(),
+            function (TableArtifact $artifact): void {
+                $this->line("  {$artifact->connection}.{$artifact->table} … {$artifact->rows} rows");
+            },
+        );
     }
 
     /**
@@ -178,18 +220,23 @@ final class DumpCommand extends Command
         }
     }
 
-    private function size(int $bytes): string
+    private function salt(): ?string
     {
-        $units = ['B', 'KB', 'MB', 'GB'];
-        $value = (float) $bytes;
-        $unit = 0;
+        $salt = config('dead-drop.redaction.salt');
 
-        while ($value >= 1024 && $unit < count($units) - 1) {
-            $value /= 1024;
-            $unit++;
-        }
+        return is_string($salt) ? $salt : null;
+    }
 
-        return $unit === 0 ? "{$bytes} B" : sprintf('%.1f %s', $value, $units[$unit]);
+    private function disk(): string
+    {
+        $disk = $this->option('disk');
+
+        return is_string($disk) && $disk !== '' ? $disk : (string) config('dead-drop.disk');
+    }
+
+    private function basePath(): string
+    {
+        return (string) config('dead-drop.path');
     }
 
     private function directory(): string

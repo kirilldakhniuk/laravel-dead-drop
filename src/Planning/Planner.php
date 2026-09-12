@@ -40,7 +40,7 @@ final class Planner
         $result = $this->traverser->traverse($root, $config, $schemas, $since);
 
         return new ExtractionPlan(
-            $this->order($this->steps($result, $config, $schemas), Graph::fromConfig($config)),
+            $this->order($this->steps($result, $root, $config, $schemas), Graph::fromConfig($config)),
             $result->unresolved(),
         );
     }
@@ -83,11 +83,13 @@ final class Planner
 
     /**
      * One step per key set that actually holds rows. A lookup table is taken
-     * whole, so it carries no key table even though the traversal seeded one.
+     * whole, so it carries no key table even though the traversal seeded one —
+     * unless it is the root, which is asked for by id like any other root and
+     * whose key set therefore holds exactly the rows the plan counted.
      *
      * @return list<PlanStep>
      */
-    private function steps(TraversalResult $result, ConfigSet $config, SchemaSet $schemas): array
+    private function steps(TraversalResult $result, Root $root, ConfigSet $config, SchemaSet $schemas): array
     {
         $steps = [];
 
@@ -100,11 +102,12 @@ final class Planner
 
             $table = $schemas->for($keySet->connection)->table($keySet->table);
             $lookup = $config->for($keySet->connection)->table($keySet->table)?->class === TableClass::Lookup;
+            $isRoot = $keySet->connection === $root->connection && $keySet->table === $root->table;
 
             $steps[] = new PlanStep(
                 connection: $keySet->connection,
                 table: $keySet->table,
-                keyTable: $lookup ? null : $keySet->tableName,
+                keyTable: $lookup && ! $isRoot ? null : $keySet->tableName,
                 rows: $rows,
                 estimatedBytes: $table === null ? 0 : intdiv($table->estimatedBytes * $rows, max($table->estimatedRows, 1)),
             );

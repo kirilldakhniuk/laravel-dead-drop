@@ -42,6 +42,23 @@ it('writes a complete artifact whose counts match the plan', function () {
         ->and(collect($manifest->tables)->firstWhere('table', 'users')->redacted)->toBe(['email', 'password']);
 });
 
+it('exports only the root ids when the root table is a lookup table', function () {
+    // A lookup table is copied whole *as a lookup* — but as a root it is asked
+    // for by id like any other, and its key set holds exactly what the plan
+    // counted. Taking it whole would put rows nobody planned into the artifact.
+    $path = initFixtureConfig();
+
+    expect((require $path.'/dd_test.php')['countries']['class'])->toBe('lookup');
+
+    $id = dumpFixture('dd_test.countries:1', $path);
+    $reader = new ArtifactReader(Storage::disk('local'), 'dead-drops');
+    $manifest = $reader->manifest($id);
+    $countries = collect($manifest->tables)->firstWhere('table', 'countries');
+
+    expect($countries->rows)->toBe(1)
+        ->and(array_column(iterator_to_array($reader->rows($id, $countries), false), 'id'))->toBe([1]);
+});
+
 it('prints progress and the artifact location', function () {
     $path = initFixtureConfig();
 

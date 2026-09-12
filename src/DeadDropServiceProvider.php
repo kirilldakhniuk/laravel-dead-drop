@@ -10,6 +10,8 @@ use DeadDrop\DeadDrop\Console\Commands\DumpsCommand;
 use DeadDrop\DeadDrop\Console\Commands\InitCommand;
 use DeadDrop\DeadDrop\Extraction\ExecutorManager;
 use DeadDrop\DeadDrop\Inference\Sources\EloquentSource;
+use DeadDrop\DeadDrop\Loading\LoaderRegistry;
+use DeadDrop\DeadDrop\Loading\NdjsonLoader;
 use DeadDrop\DeadDrop\Planning\KeySetRepository;
 use Illuminate\Contracts\Foundation\Application;
 use Illuminate\Support\ServiceProvider;
@@ -23,6 +25,8 @@ class DeadDropServiceProvider extends ServiceProvider
         $this->app->scoped(KeySetRepository::class);
 
         $this->app->singleton(ExecutorManager::class);
+
+        $this->app->singleton(LoaderRegistry::class, fn (): LoaderRegistry => new LoaderRegistry([new NdjsonLoader]));
 
         $this->app->singleton(EloquentSource::class, fn (Application $app): EloquentSource => new EloquentSource(
             array_values(array_map(

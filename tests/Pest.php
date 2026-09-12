@@ -10,9 +10,18 @@ use DeadDrop\DeadDrop\Schema\DatabaseSchema;
 use DeadDrop\DeadDrop\Schema\Introspector;
 use DeadDrop\DeadDrop\Schema\SchemaSet;
 use DeadDrop\DeadDrop\Tests\TestCase;
+use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 
 uses(TestCase::class)->in(__DIR__);
+
+function fakeArtifactDisk(): void
+{
+    Storage::fake('local');
+    config()->set('dead-drop.disk', 'local');
+    config()->set('dead-drop.path', 'dead-drops');
+    config()->set('dead-drop.redaction.salt', str_repeat('s', 32));
+}
 
 function tempDirectory(): string
 {

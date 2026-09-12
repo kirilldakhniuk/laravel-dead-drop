@@ -1,0 +1,73 @@
+<?php
+
+declare(strict_types=1);
+
+use DeadDrop\DeadDrop\Artifacts\ArtifactReader;
+use DeadDrop\DeadDrop\Artifacts\ArtifactWriter;
+use DeadDrop\DeadDrop\Artifacts\Manifest;
+use DeadDrop\DeadDrop\Artifacts\TableManifest;
+use DeadDrop\DeadDrop\Schema\ColumnType;
+use Illuminate\Support\Facades\Storage;
+
+beforeEach(fn () => fakeArtifactDisk());
+
+function writeSampleArtifact(string $id, string $status = Manifest::STATUS_COMPLETE): Manifest
+{
+    $disk = Storage::disk('local');
+    $writer = new ArtifactWriter($disk, 'dead-drops', $id);
+    $types = ['id' => ColumnType::Integer, 'name' => ColumnType::String, 'flags' => ColumnType::Json, 'blob' => ColumnType::Binary, 'ok' => ColumnType::Boolean];
+
+    $file = $writer->table('dd_test.things.ndjson.gz', $types);
+    $file->append(['id' => 1, 'name' => 'héllo/wörld', 'flags' => '{"a":1}', 'blob' => "\x00\xff\x10", 'ok' => 1]);
+    $file->append(['id' => 2, 'name' => null, 'flags' => null, 'blob' => null, 'ok' => 0]);
+    $counts = $file->finish();
+
+    $manifest = new Manifest($id, $status, '2026-09-12T14:15:00+00:00', 'dev', 'dd_test.things:1', null, 'php', ['dd_test' => ['driver' => 'sqlite']], [
+        new TableManifest('dd_test', 'things', 'dd_test.things.ndjson.gz', 'ndjson', $counts['rows'], $counts['bytes'], 'id', [
+            ['name' => 'id', 'type' => 'int'], ['name' => 'name', 'type' => 'string'], ['name' => 'flags', 'type' => 'json'], ['name' => 'blob', 'type' => 'binary'], ['name' => 'ok', 'type' => 'bool'],
+        ], []),
+    ], []);
+    $writer->writeManifest($manifest);
+
+    return $manifest;
+}
+
+it('writes a gzipped ndjson file and a manifest under the dump id', function () {
+    writeSampleArtifact('20260912-141500-aaaaaa');
+
+    expect(Storage::disk('local')->exists('dead-drops/20260912-141500-aaaaaa/manifest.json'))->toBeTrue()
+        ->and(Storage::disk('local')->exists('dead-drops/20260912-141500-aaaaaa/dd_test.things.ndjson.gz'))->toBeTrue();
+});
+
+it('reads rows back with types restored', function () {
+    $manifest = writeSampleArtifact('20260912-141500-aaaaaa');
+    $reader = new ArtifactReader(Storage::disk('local'), 'dead-drops');
+
+    $rows = iterator_to_array($reader->rows($manifest->id, $manifest->tables[0]), false);
+
+    expect($rows)->toHaveCount(2)
+        ->and($rows[0]['id'])->toBe(1)
+        ->and($rows[0]['name'])->toBe('héllo/wörld')
+        ->and($rows[0]['flags'])->toBe('{"a":1}')
+        ->and($rows[0]['blob'])->toBe("\x00\xff\x10")
+        ->and($rows[0]['ok'])->toBeTrue()
+        ->and($rows[1]['name'])->toBeNull()
+        ->and($rows[1]['blob'])->toBeNull()
+        ->and($rows[1]['ok'])->toBeFalse()
+        ->and($manifest->tables[0]->rows)->toBe(2);
+});
+
+it('lists ids newest first and finds the latest complete manifest', function () {
+    writeSampleArtifact('20260912-141500-aaaaaa');
+    writeSampleArtifact('20260912-150000-bbbbbb', Manifest::STATUS_WRITING);
+    writeSampleArtifact('20260911-090000-cccccc');
+    $reader = new ArtifactReader(Storage::disk('local'), 'dead-drops');
+
+    expect($reader->ids())->toBe(['20260912-150000-bbbbbb', '20260912-141500-aaaaaa', '20260911-090000-cccccc'])
+        ->and($reader->latestComplete()?->id)->toBe('20260912-141500-aaaaaa')
+        ->and(fn () => $reader->manifest('nope'))->toThrow(InvalidArgumentException::class, 'nope');
+});
+
+it('returns null when no complete artifact exists', function () {
+    expect((new ArtifactReader(Storage::disk('local'), 'dead-drops'))->latestComplete())->toBeNull();
+});

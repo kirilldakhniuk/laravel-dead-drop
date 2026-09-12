@@ -9,6 +9,7 @@ use DeadDrop\DeadDrop\Artifacts\RowCodec;
 use DeadDrop\DeadDrop\Artifacts\TableManifest;
 use DeadDrop\DeadDrop\Schema\ColumnType;
 use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Str;
 
 beforeEach(fn () => fakeArtifactDisk());
 
@@ -74,17 +75,34 @@ it('returns null when no complete artifact exists', function () {
 });
 
 it('removes its staging file when aborted before finish', function () {
-    $before = glob(sys_get_temp_dir().'/dead-drop-*') ?: [];
+    // Pinning the staging file's name names the one file this assertion is
+    // about: globbing the shared temp dir also sees the files the other
+    // parallel workers are writing at that moment.
+    Str::createRandomStringsUsing(fn (): string => 'aborted-before-finish');
+    $staging = sys_get_temp_dir().'/dead-drop-aborted-before-finish';
 
-    $writer = new ArtifactWriter(Storage::disk('local'), 'dead-drops', '20260912-141500-dddddd');
+    try {
+        $writer = new ArtifactWriter(Storage::disk('local'), 'dead-drops', '20260912-141500-dddddd');
+        $file = $writer->table('dd_test.things.ndjson.gz', ['id' => ColumnType::Integer]);
+        $file->append(['id' => 1]);
+
+        expect(is_file($staging))->toBeTrue();
+
+        $file->abort();
+    } finally {
+        Str::createRandomStringsNormally();
+    }
+
+    expect(is_file($staging))->toBeFalse()
+        ->and(Storage::disk('local')->exists('dead-drops/20260912-141500-dddddd/dd_test.things.ndjson.gz'))->toBeFalse();
+});
+
+it('refuses to finish a table file that was aborted', function () {
+    $writer = new ArtifactWriter(Storage::disk('local'), 'dead-drops', '20260912-141500-eeeeee');
     $file = $writer->table('dd_test.things.ndjson.gz', ['id' => ColumnType::Integer]);
-    $file->append(['id' => 1]);
     $file->abort();
 
-    $after = glob(sys_get_temp_dir().'/dead-drop-*') ?: [];
-
-    expect($after)->toBe($before)
-        ->and(Storage::disk('local')->exists('dead-drops/20260912-141500-dddddd/dd_test.things.ndjson.gz'))->toBeFalse();
+    expect(fn () => $file->finish())->toThrow(RuntimeException::class, 'already finished or aborted');
 });
 
 it('throws when the copied bytes do not match the manifest', function () {

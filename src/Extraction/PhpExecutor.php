@@ -61,23 +61,25 @@ final class PhpExecutor implements Executor
         $fileName = "{$step->connection}.{$step->table}.ndjson.gz";
         $file = $writer->table($fileName, $types);
 
-        $query = $db->table($table->name)
-            ->select("{$table->name}.*")
-            ->orderBy("{$table->name}.{$primaryKey}");
+        $query = $db->table($table->name)->select("{$table->name}.*");
 
         if ($keys !== null) {
             $query->join($keys->tableName, "{$table->name}.{$primaryKey}", '=', "{$keys->tableName}.k");
         }
 
         try {
-            $query->chunk(self::CHUNK, function (Collection $rows) use ($file, $redactor): void {
+            // Keyed pagination rather than offsets: it stays correct while
+            // rows are deleted underneath the read, and does not slow down as
+            // the dump walks deep into a large table. `chunkById()` orders by
+            // the key column itself.
+            $query->chunkById(self::CHUNK, function (Collection $rows) use ($file, $redactor): void {
                 foreach ($rows as $row) {
                     /** @var array<string, mixed> $values */
                     $values = (array) $row;
 
                     $file->append($redactor->apply($values));
                 }
-            });
+            }, "{$table->name}.{$primaryKey}", $primaryKey);
 
             $counts = $file->finish();
         } catch (Throwable $e) {

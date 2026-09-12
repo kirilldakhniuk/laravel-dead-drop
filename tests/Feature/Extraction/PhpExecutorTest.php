@@ -17,6 +17,7 @@ use DeadDrop\DeadDrop\Schema\Table;
 use DeadDrop\DeadDrop\Tests\Fixtures\SchemaBuilder;
 use Illuminate\Database\QueryException;
 use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Str;
 
 beforeEach(function () {
     SchemaBuilder::migrate('dd_test');
@@ -75,15 +76,24 @@ it('aborts the table file when reading fails', function () {
     $redactor = Redactor::forTable($config, $table, new RedactionContext(str_repeat('s', 32), 'example.test'));
     $step = new PlanStep('dd_test', 'users', $keys->tableName, $keys->count(), 0);
 
-    // Only staging files this test added count: the suite runs in parallel
-    // workers that create and remove their own files in the shared temp dir.
-    $before = glob(sys_get_temp_dir().'/dead-drop-*') ?: [];
+    // Pinning the staging file's name names the one file this assertion is
+    // about: globbing the shared temp dir also sees the files the other
+    // parallel workers are writing at that moment.
+    Str::createRandomStringsUsing(fn (): string => 'executor-abort-staging');
+    $staging = sys_get_temp_dir().'/dead-drop-executor-abort-staging';
+    $error = null;
 
-    expect(fn () => (new PhpExecutor)->export($step, $table, $config, $keys, $redactor, $writer))
-        ->toThrow(QueryException::class);
+    // The exception is held rather than asserted on straight away: releasing
+    // it drops the last reference to the writer, whose destructor would clean
+    // the staging file up and make this pass without an explicit abort.
+    try {
+        (new PhpExecutor)->export($step, $table, $config, $keys, $redactor, $writer);
+    } catch (Throwable $error) {
+    } finally {
+        Str::createRandomStringsNormally();
+    }
 
-    $added = array_values(array_filter(array_diff(glob(sys_get_temp_dir().'/dead-drop-*') ?: [], $before), is_file(...)));
-
-    expect($added)->toBe([])
+    expect(is_file($staging))->toBeFalse()
+        ->and($error)->toBeInstanceOf(QueryException::class)
         ->and(Storage::disk('local')->exists('dead-drops/test-id/dd_test.users.ndjson.gz'))->toBeFalse();
 });

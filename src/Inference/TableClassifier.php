@@ -49,7 +49,7 @@ final class TableClassifier
     ];
 
     /**
-     * A lookup table must be smaller than this many rows.
+     * A lookup table must have a known row estimate smaller than this.
      */
     private const int LOOKUP_ROW_LIMIT = 10_000;
 
@@ -91,7 +91,11 @@ final class TableClassifier
             return false;
         }
 
-        return $table->estimatedRows < self::LOOKUP_ROW_LIMIT;
+        // Row counts are estimates, and every engine reports "I don't know"
+        // as a zero — a freshly analysed table, a partition, a table the
+        // statistics have not caught up with. Copying an unknown-sized table
+        // whole is the expensive mistake, so an unknown size is not a lookup.
+        return $table->estimatedRows > 0 && $table->estimatedRows < self::LOOKUP_ROW_LIMIT;
     }
 
     /**

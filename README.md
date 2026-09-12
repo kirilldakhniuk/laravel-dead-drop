@@ -51,7 +51,7 @@ The remaining keys (`disk`, `path`, `redaction`, `binaries`, `pull`) are reserve
 php artisan dead-drop:init
 ```
 
-Run without arguments in an interactive terminal, it prompts you to pick which of your `database.connections` to enroll and offers to skip the ten largest tables it found. Non-interactively (for example in a script or CI), pass the connections and skips explicitly:
+Run without arguments in an interactive terminal, it prompts you to pick which of your `database.connections` to enroll and offers to skip the ten largest tables it found. A stock app ships connections nothing is configured for, so a connection the command cannot read — an unsupported driver, a host that is not up — is printed as `name (unavailable: <reason>)` and left out of the choices rather than failing the command. Non-interactively (for example in a script or CI), pass the connections and skips explicitly:
 
 ```bash
 php artisan dead-drop:init --no-interaction --connection=mysql --connection=analytics --skip=audit_logs --path=config/dead-drop
@@ -119,11 +119,13 @@ Every table entry can hold these keys, and nothing else:
 
 - `class` — one of three values:
   - `data` — an ordinary table: scoped by the traversal, and redacted per its `redact` entries.
-  - `lookup` — a small reference table (fewer than 10,000 rows, no outbound reference, no polymorphic pair, nothing sensitive) that is copied whole rather than scoped.
+  - `lookup` — a small reference table (a known row estimate of at least one and fewer than 10,000, no outbound reference, no polymorphic pair, nothing sensitive) that is copied whole rather than scoped. Row counts are estimates and every engine reports an unknown one as zero, so a table whose size cannot be established is treated as `data`, not copied whole.
   - `skip` — never dumped. Framework bookkeeping tables (`migrations`, `jobs`, `job_batches`, `failed_jobs`, `cache`, `cache_locks`, `sessions`, `password_reset_tokens`, `password_resets`, `personal_access_tokens`, and anything prefixed `telescope_` or `pulse_`) are skipped automatically; anything else can be forced to `skip` with `--skip=` or by hand-editing the file.
 - `removed` — present (and `true`) only when a table that used to be in this file has since disappeared from the schema. `dead-drop:init` never deletes an entry outright; it marks it `removed` so dropping it from the plan is a deliberate, reviewable edit.
 - `window` — the name of a `created_at`-like column used to scope an incremental dump to rows on or after a `--since` date. `dead-drop:init` fills this in automatically when the table has a `created_at` column.
 - `exclude` — a raw SQL boolean fragment naming rows to drop from a descending scope, e.g. `"status = 'test'"`. It is applied NULL-safe (a row whose fragment evaluates to `NULL` is kept, not dropped) and wrapped so it cannot escape the query. Never set by `init`; a human writes it.
+
+`exclude` and `window` limit what is collected while descending from the root; they are not filters on the finished dump. A row an ascending pass needs to keep a collected row referentially complete is still pulled in, `exclude` and `window` notwithstanding — otherwise the dump would contain rows pointing at nothing. Use `skip` on the table, or a `redact` entry on the column, when data must be absent absolutely.
 - `morph` — `['type' => '<type column>', 'id' => '<id column>']` for an Eloquent-style polymorphic pair (`commentable_type` / `commentable_id`), detected automatically from the `{prefix}_type` / `{prefix}_id` naming convention.
 - `columns` — every column name, in schema order, as of the last `init`. This is what lets `dead-drop:check` detect a column that was added or removed since.
 - `references` — keyed by the referencing column, one entry per outbound foreign-key-like edge. A reference can be written three ways:
@@ -146,7 +148,7 @@ Every table entry can hold these keys, and nothing else:
 
 ### Re-running `init`
 
-`dead-drop:init` is safe to re-run against a changed schema: it merges the freshly discovered config into the existing file rather than overwriting it. A human's `class`, `redact` entries, `descend` flags and reference targets are always kept; only `columns` (and an upgraded reference `source`) are refreshed from the schema. A table that vanished from the schema is not deleted from the file — it is kept and marked `removed`, so dropping it from the plan stays a deliberate act. Re-running `init` with nothing changed produces an identical file: rendering is deterministic (tables, references and redactions are sorted, and keys appear in a fixed order).
+`dead-drop:init` is safe to re-run against a changed schema: it merges the freshly discovered config into the existing file rather than overwriting it. A human's `class`, `redact` entries, `descend` flags and reference targets are always kept and never overwritten; `columns` (and an upgraded reference `source`) are refreshed from the schema, and `references` and `redact` entries discovered since the last run — a new foreign key, a newly added sensitive column — are added alongside the existing ones. A table that vanished from the schema is not deleted from the file — it is kept and marked `removed`, so dropping it from the plan stays a deliberate act. Re-running `init` with nothing changed produces an identical file: rendering is deterministic (tables, references and redactions are sorted, and keys appear in a fixed order).
 
 ### Checking for drift in CI
 
@@ -159,7 +161,7 @@ php artisan dead-drop:check
 - `--connection=` (repeatable) — connections to check. Defaults to every config file found in the directory.
 - `--path=` — config directory. Defaults to `config_path(config('dead-drop.config_path'))`.
 
-It exits `0` when there are no connections to check (no `--connection=` given and no config files found in the directory) or every checked connection is clean, and `1` when any checked connection has:
+It exits `0` when every checked connection is clean, and `1` when any checked connection has:
 
 - a new table present in the schema but missing from the config,
 - a table in the config that has vanished from the schema (and is not already marked `removed`),
@@ -167,7 +169,7 @@ It exits `0` when there are no connections to check (no `--connection=` given an
 - a sensitive column the config has no `redact` entry for, or
 - a `redact` entry still set to the `review` placeholder,
 
-or when a named connection has no config file at all (it tells you to run `dead-drop:init --connection=<name>`).
+or when a named connection has no config file at all (it tells you to run `dead-drop:init --connection=<name>`). Running it with no `--connection=` against a directory holding no config at all is a failure too, not a pass — a CI job that never ran `init` should not go green.
 
 ### Planning a dump
 
@@ -184,6 +186,8 @@ php artisan dead-drop:dump --root=mysql.companies:1 --dry-run
 - `--path=` — config directory. Defaults to `config_path(config('dead-drop.config_path'))`.
 
 `--full` is not implemented yet; passing it fails with an explicit error rather than doing something partial.
+
+Planning reads through the write connection: the traversal holds its key sets in temporary tables, which only exist on the session that created them, so on a read/write-split connection DeadDrop pins reads to the primary for the duration of the run.
 
 The plan is printed as a table of connection, table, row count and estimated size, followed by the total row count, total estimated size, and any unresolved references. In plain words, the traversal:
 

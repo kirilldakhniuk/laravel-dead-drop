@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 use DeadDrop\DeadDrop\Planning\MorphResolver;
 use DeadDrop\DeadDrop\Tests\Fixtures\Models\AbstractRecord;
+use DeadDrop\DeadDrop\Tests\Fixtures\Models\Broken;
 use DeadDrop\DeadDrop\Tests\Fixtures\Models\Order;
 use DeadDrop\DeadDrop\Tests\Fixtures\SchemaBuilder;
 use Illuminate\Database\Eloquent\Relations\Relation;
@@ -66,4 +67,8 @@ it('ascends from a collected morph row to its target', function () {
 
 it('returns null for an abstract model class', function () {
     expect((new MorphResolver)->tableFor(AbstractRecord::class))->toBeNull();
+});
+
+it('returns null for a model whose constructor demands arguments', function () {
+    expect((new MorphResolver)->tableFor(Broken::class))->toBeNull();
 });

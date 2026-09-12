@@ -27,6 +27,13 @@ final class KeySetRepository
      */
     private array $mirrors = [];
 
+    /**
+     * Connections already pinned to their write PDO.
+     *
+     * @var array<string, true>
+     */
+    private array $pinned = [];
+
     public function __construct(
         private readonly DriverFactory $drivers,
     ) {}
@@ -94,11 +101,22 @@ final class KeySetRepository
 
         $this->keySets = [];
         $this->mirrors = [];
+        $this->pinned = [];
     }
 
     private function make(string $connection, string $table, string $name, ColumnType $type): KeySet
     {
         $db = DB::connection($connection);
+
+        // A temporary key table lives on the session that created it. On a
+        // read/write-split connection that is the write PDO, so every read of
+        // it — and every join against it — has to go there too.
+        if (! isset($this->pinned[$connection])) {
+            $db->useWriteConnectionWhenReading();
+
+            $this->pinned[$connection] = true;
+        }
+
         $driver = $this->drivers->for($db);
 
         $driver->createKeyTable($db, $name, $type);

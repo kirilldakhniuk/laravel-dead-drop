@@ -46,10 +46,10 @@ it('does not grow the key table when a duplicate key is inserted', function () {
     $connection = DB::connection();
 
     $driver->createKeyTable($connection, 'dd_keys_users', ColumnType::Integer);
-    $driver->insertKeys($connection, 'dd_keys_users', [1, 2, 3]);
-    $driver->insertKeys($connection, 'dd_keys_users', [3, 4]);
 
-    expect($driver->countKeys($connection, 'dd_keys_users'))->toBe(4);
+    expect($driver->insertKeys($connection, 'dd_keys_users', [1, 2, 3]))->toBe(3)
+        ->and($driver->insertKeys($connection, 'dd_keys_users', [3, 4]))->toBe(1)
+        ->and($driver->countKeys($connection, 'dd_keys_users'))->toBe(4);
 
     $driver->dropKeyTable($connection, 'dd_keys_users');
 });

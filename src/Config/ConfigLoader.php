@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace DeadDrop\DeadDrop\Config;
 
+use InvalidArgumentException;
 use RuntimeException;
 
 /**
@@ -25,7 +26,13 @@ final class ConfigLoader
             throw new RuntimeException("Config file [$path] must return an array.");
         }
 
-        return ConnectionConfig::fromArray($connection, $raw);
+        try {
+            return ConnectionConfig::fromArray($connection, $raw);
+        } catch (InvalidArgumentException $e) {
+            // These files are hand-edited, so a parse error is only actionable
+            // once it names the file it came from.
+            throw new InvalidArgumentException("$path: {$e->getMessage()}", previous: $e);
+        }
     }
 
     public function loadAll(string $directory): ConfigSet

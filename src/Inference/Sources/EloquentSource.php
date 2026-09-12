@@ -220,7 +220,7 @@ final class EloquentSource
             return null;
         }
 
-        if (! preg_match('/class\s+(\w+)/', $contents, $classMatch)) {
+        if (! preg_match('/^\s*(?:final\s+|abstract\s+|readonly\s+)*class\s+(\w+)/mi', $contents, $classMatch)) {
             return null;
         }
 

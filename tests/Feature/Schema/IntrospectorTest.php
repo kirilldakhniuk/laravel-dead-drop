@@ -55,3 +55,15 @@ it('ignores temporary tables', function () {
 
     expect(app(Introspector::class)->inspect('dd_test')->tableNames())->not->toContain('dd_keys_scratch');
 });
+
+it('ignores tables that belong to another schema', function () {
+    $db = DB::connection('dd_test');
+
+    $db->statement("ATTACH DATABASE ':memory:' AS other");
+    $db->statement('CREATE TABLE other.foreign_table (id INTEGER PRIMARY KEY)');
+
+    $names = app(Introspector::class)->inspect('dd_test')->tableNames();
+
+    expect($names)->not->toContain('foreign_table');
+    expect($names)->toContain('companies');
+});

@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace DeadDrop\DeadDrop\Config;
 
 use InvalidArgumentException;
+use ValueError;
 
 /**
  * One table's reviewed plan: how it is treated, which columns it had at the
@@ -38,7 +39,7 @@ final readonly class TableConfig
     {
         return new self(
             name: $name,
-            class: self::readClass($raw),
+            class: self::readClass($name, $raw),
             columns: self::readColumns($raw),
             references: self::readReferences($name, $raw),
             redact: self::readRedact($raw),
@@ -112,13 +113,37 @@ final readonly class TableConfig
     }
 
     /**
+     * A hand-edited file is the common source of a bad `class`, so a typo
+     * names the table it is in and the values it could have been instead of
+     * surfacing a raw `ValueError` — and a missing one is an error rather
+     * than a silent fall back to the widest treatment.
+     *
      * @param  array<array-key, mixed>  $raw
      */
-    private static function readClass(array $raw): TableClass
+    private static function readClass(string $name, array $raw): TableClass
     {
         $class = $raw['class'] ?? null;
 
-        return is_string($class) ? TableClass::from($class) : TableClass::Data;
+        if (! is_string($class)) {
+            throw new InvalidArgumentException("Table [$name] is missing a valid 'class' (".self::accepted(TableClass::cases()).').');
+        }
+
+        try {
+            return TableClass::from($class);
+        } catch (ValueError $e) {
+            throw new InvalidArgumentException(
+                "Table [$name] has an unknown 'class' [$class]; expected one of ".self::accepted(TableClass::cases()).'.',
+                previous: $e,
+            );
+        }
+    }
+
+    /**
+     * @param  list<TableClass>  $cases
+     */
+    private static function accepted(array $cases): string
+    {
+        return implode(', ', array_map(fn (TableClass $case): string => $case->value, $cases));
     }
 
     /**
@@ -163,7 +188,7 @@ final readonly class TableConfig
                 throw new InvalidArgumentException("Reference [$name.$column] must be a string or an array.");
             }
 
-            $references[(string) $column] = Reference::fromArray($reference);
+            $references[(string) $column] = Reference::fromArray($reference, "$name.$column");
         }
 
         return $references;

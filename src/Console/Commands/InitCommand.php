@@ -22,6 +22,8 @@ use DeadDrop\DeadDrop\Schema\DatabaseSchema;
 use DeadDrop\DeadDrop\Schema\Introspector;
 use DeadDrop\DeadDrop\Schema\Table;
 use Illuminate\Console\Command;
+use Illuminate\Support\Str;
+use Throwable;
 
 use function Laravel\Prompts\multiselect;
 
@@ -42,6 +44,15 @@ final class InitCommand extends Command
 
     /** @var string */
     protected $description = "Discover a connection's schema and scaffold or update its DeadDrop config";
+
+    /**
+     * Introspection is the expensive part of this command, and the prompts
+     * need it before the work does, so every connection is read at most once
+     * per run.
+     *
+     * @var array<string, DatabaseSchema>
+     */
+    private array $schemas = [];
 
     public function handle(
         Introspector $introspector,
@@ -68,6 +79,13 @@ final class InitCommand extends Command
             }
 
             $connections = $this->promptForConnections($introspector);
+
+            if ($connections === []) {
+                $this->error('No database connection could be read — check your database configuration.');
+
+                return self::FAILURE;
+            }
+
             $skip = [...$skip, ...$this->promptForSkippedTables($introspector, $connections)];
         }
 
@@ -90,7 +108,7 @@ final class InitCommand extends Command
         }
 
         foreach ($connections as $connection) {
-            $schema = $introspector->inspect($connection);
+            $schema = $this->describe($introspector, $connection);
             $edges = $edgeInferrer->infer($schema);
 
             $discovered = $this->discover($schema, $edges, $classifier, $sensitive, $morphs, $skip);
@@ -112,6 +130,12 @@ final class InitCommand extends Command
     }
 
     /**
+     * A stock Laravel app ships connections nothing has ever been configured
+     * for — an unsupported driver, a host that is not up. Offering them would
+     * mean introspecting them, so each one is tried, and the ones that cannot
+     * answer are named with their reason and left out of the choices instead
+     * of taking the command down with them.
+     *
      * @return list<string>
      */
     private function promptForConnections(Introspector $introspector): array
@@ -122,8 +146,20 @@ final class InitCommand extends Command
 
         foreach ($names as $name) {
             $name = (string) $name;
-            $tableCount = count($introspector->inspect($name)->tables);
+
+            try {
+                $tableCount = count($this->describe($introspector, $name)->tables);
+            } catch (Throwable $e) {
+                $this->line("<comment>{$name} (unavailable: {$this->reason($e)})</comment>");
+
+                continue;
+            }
+
             $options[$name] = "{$name} ({$tableCount} tables)";
+        }
+
+        if ($options === []) {
+            return [];
         }
 
         /** @var list<string> $selected */
@@ -146,7 +182,7 @@ final class InitCommand extends Command
         $candidates = [];
 
         foreach ($connections as $connection) {
-            foreach ($introspector->inspect($connection)->tables as $table) {
+            foreach ($this->describe($introspector, $connection)->tables as $table) {
                 $candidates[] = [$connection, $table->name, $table->estimatedRows];
             }
         }
@@ -166,6 +202,23 @@ final class InitCommand extends Command
         );
 
         return $selected;
+    }
+
+    /**
+     * @throws Throwable when the connection cannot be introspected
+     */
+    private function describe(Introspector $introspector, string $connection): DatabaseSchema
+    {
+        return $this->schemas[$connection] ??= $introspector->inspect($connection);
+    }
+
+    /**
+     * The first line of why a connection could not be read, short enough to
+     * sit inside a prompt option.
+     */
+    private function reason(Throwable $e): string
+    {
+        return Str::limit(trim(explode("\n", $e->getMessage())[0]), 80);
     }
 
     private function directory(): string
@@ -280,11 +333,17 @@ final class InitCommand extends Command
 
         $this->line("data: {$data}, lookup: {$lookup}, skip: {$skip}");
 
-        if ($eloquentSource->skipped() !== []) {
-            $this->line('Skipped model methods without a relation return type:');
+        $skipped = $eloquentSource->skipped();
 
-            foreach ($eloquentSource->skipped() as $method) {
-                $this->line("  - {$method}");
+        if ($skipped !== []) {
+            // There is one of these for every accessor and helper on every
+            // model, so the count is the signal and the list is opt-in.
+            $this->line(count($skipped).' model methods were skipped because they lack a relation return type (run with -v to list them)');
+
+            if ($this->output->isVerbose()) {
+                foreach ($skipped as $method) {
+                    $this->line("  - {$method}");
+                }
             }
         }
 

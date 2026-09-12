@@ -37,11 +37,7 @@ final readonly class KeySet
             return 0;
         }
 
-        $before = $this->count();
-
-        $this->driver->insertKeys($this->db, $this->tableName, $keys);
-
-        return $this->count() - $before;
+        return $this->driver->insertKeys($this->db, $this->tableName, $keys);
     }
 
     public function count(): int

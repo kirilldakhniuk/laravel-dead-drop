@@ -14,7 +14,12 @@ use DeadDrop\DeadDrop\Schema\Introspector;
 use DeadDrop\DeadDrop\Tests\Fixtures\SchemaBuilder;
 use Illuminate\Support\Facades\Schema;
 
-beforeEach(fn () => SchemaBuilder::migrate('dd_test'));
+beforeEach(function () {
+    SchemaBuilder::migrate('dd_test');
+    // Row estimates decide `lookup`, and an unseeded table reports zero — which
+    // the classifier reads as "unknown size", not "small".
+    SchemaBuilder::seedTwoCompanies('dd_test');
+});
 
 function classifyFixtureTable(string $table): TableClass
 {
@@ -46,4 +51,13 @@ it('classifies a table holding sensitive columns as data even without outbound e
 
 it('classifies a table with a morph pair as data', function () {
     expect(classifyFixtureTable('comments'))->toBe(TableClass::Data);
+});
+
+it('does not classify a table with an unknown row estimate as lookup', function () {
+    Schema::connection('dd_test')->create('regions', function ($t) {
+        $t->id();
+        $t->string('code');
+    });
+
+    expect(classifyFixtureTable('regions'))->toBe(TableClass::Data);
 });

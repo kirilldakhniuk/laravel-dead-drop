@@ -20,12 +20,19 @@ final class Introspector
         $driver = $this->drivers->for($db);
         $builder = Schema::connection($connection);
         $estimates = $driver->estimatedRowCounts($db);
+        $schema = $driver->currentSchema($db);
 
         $tables = [];
 
         foreach ($builder->getTables() as $meta) {
-            if (($meta['schema'] ?? null) === 'temp') {
+            $tableSchema = $meta['schema'] ?? null;
+
+            if ($tableSchema === 'temp') {
                 continue; // SQLite lists temporary tables alongside real ones
+            }
+
+            if ($tableSchema !== null && $schema !== null && $tableSchema !== $schema) {
+                continue; // another schema, another database, or an attached one
             }
 
             $name = $meta['name'];

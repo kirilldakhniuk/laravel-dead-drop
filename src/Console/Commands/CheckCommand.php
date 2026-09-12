@@ -29,7 +29,11 @@ final class CheckCommand extends Command
         $connections = $this->connections($loader, $directory);
 
         if ($connections === []) {
-            return self::SUCCESS;
+            // Nothing to compare is not the same as nothing to report: a CI
+            // job that never ran init would otherwise pass silently.
+            $this->error("No DeadDrop config found in [{$directory}] — run dead-drop:init");
+
+            return self::FAILURE;
         }
 
         $knownConnections = array_keys((array) config('database.connections'));

@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 use DeadDrop\DeadDrop\Planning\Root;
+use DeadDrop\DeadDrop\Tests\Fixtures\Models\Order;
 use DeadDrop\DeadDrop\Tests\Fixtures\SchemaBuilder;
 use Illuminate\Support\Facades\DB;
 
@@ -140,4 +141,29 @@ it('resolves every collected foreign key within the collected set', function () 
             expect(collectedKeys($result, 'customers'))->toContain($order->customer_id);
         }
     }
+});
+
+it('ascends into a row an exclude fragment kept out of every descending pass', function () {
+    // `exclude` scopes descent; referential completeness outranks it on the way
+    // up, so a row pointed at by something collected is still pulled in.
+    DB::connection('dd_test')->table('comments')->insert([
+        ['id' => 2, 'commentable_type' => Order::class, 'commentable_id' => 99, 'body' => 'on an excluded order'],
+    ]);
+
+    $path = initFixtureConfig();
+    $file = $path.'/dd_test.php';
+
+    file_put_contents($file, str_replace(
+        "'window' => 'created_at',",
+        "'window' => 'created_at',\n        'exclude' => 'total >= 20',",
+        (string) file_get_contents($file),
+    ));
+
+    // Order 99's total is 30.00, so the fragment names it for removal: company 2
+    // descends to orders 1 and 99, and keeps only 1.
+    expect(collectedKeys(traverseFixture('dd_test.companies:2', $path), 'orders'))->toBe([1]);
+
+    // Comment 2 points at order 99 all the same, and a collected row is never
+    // left pointing at nothing.
+    expect(collectedKeys(traverseFixture('dd_test.comments:2', $path), 'orders'))->toBe([99]);
 });

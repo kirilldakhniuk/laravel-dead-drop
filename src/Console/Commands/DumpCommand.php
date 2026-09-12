@@ -19,6 +19,7 @@ use DeadDrop\DeadDrop\Schema\DatabaseSchema;
 use DeadDrop\DeadDrop\Schema\Introspector;
 use DeadDrop\DeadDrop\Schema\SchemaSet;
 use Illuminate\Console\Command;
+use Illuminate\Database\QueryException;
 use InvalidArgumentException;
 
 /**
@@ -79,6 +80,13 @@ final class DumpCommand extends Command
             $plan = $planner->plan($root, $config, $this->schemas($config, $introspector), $since);
         } catch (UnsupportedTableException|CircularConnectionException|InvalidArgumentException $e) {
             $this->error($e->getMessage());
+
+            return self::FAILURE;
+        } catch (QueryException $e) {
+            // A hand-written `exclude` fragment or a window column that is not
+            // one reaches the database as-is; the operator gets the engine's
+            // complaint rather than a stack trace.
+            $this->error("Planning failed: {$e->getMessage()}");
 
             return self::FAILURE;
         } finally {

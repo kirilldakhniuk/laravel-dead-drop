@@ -7,6 +7,7 @@ namespace DeadDrop\DeadDrop\Planning;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\Relation;
 use ReflectionClass;
+use Throwable;
 
 /**
  * Turns the type string stored in a polymorphic column into the table it
@@ -27,13 +28,24 @@ final class MorphResolver
             return null;
         }
 
-        // A morph type naming an abstract base model resolves to a real class
-        // that cannot be constructed, and the table name is only reachable
-        // through an instance.
-        if (! (new ReflectionClass($class))->isInstantiable()) {
+        $reflection = new ReflectionClass($class);
+
+        // A morph type naming an abstract base model — or a model whose
+        // constructor demands arguments — resolves to a real class that cannot
+        // be constructed, and the table name is only reachable through an
+        // instance.
+        if (! $reflection->isInstantiable()) {
             return null;
         }
 
-        return (new $class)->getTable();
+        if (($reflection->getConstructor()?->getNumberOfRequiredParameters() ?? 0) > 0) {
+            return null;
+        }
+
+        try {
+            return (new $class)->getTable();
+        } catch (Throwable) {
+            return null;
+        }
     }
 }

@@ -79,3 +79,18 @@ it('writes no files and leaves no key tables behind', function () {
     expect(Storage::disk('s3')->allFiles())->toBe([])
         ->and(collect(Schema::connection('dd_test')->getTables())->pluck('name')->filter(fn ($n) => str_starts_with($n, 'dd_keys_'))->all())->toBe([]);
 });
+
+it('fails clearly when a hand written exclude fragment is not valid SQL', function () {
+    $path = initFixtureConfig();
+    $file = $path.'/dd_test.php';
+
+    file_put_contents($file, str_replace(
+        "'window' => 'created_at',",
+        "'window' => 'created_at',\n        'exclude' => 'this is not sql',",
+        (string) file_get_contents($file),
+    ));
+
+    $this->artisan('dead-drop:dump', ['--root' => 'dd_test.companies:1', '--path' => $path, '--dry-run' => true])
+        ->expectsOutputToContain('Planning failed')
+        ->assertFailed();
+});

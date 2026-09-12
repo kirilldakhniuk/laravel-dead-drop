@@ -16,6 +16,9 @@ it('writes a config file per connection without interaction', function () {
 });
 
 it('classifies known tables in the written config', function () {
+    // `countries` is only a lookup once it has a known, small row count.
+    SchemaBuilder::seedTwoCompanies('dd_test');
+
     $config = require initFixtureConfig().'/dd_test.php';
 
     expect($config['failed_jobs']['class'])->toBe('skip')
@@ -76,4 +79,37 @@ it('fails when the config directory cannot be created', function () {
     $this->artisan('dead-drop:init', ['--connection' => ['dd_test'], '--path' => $blocker.'/nested', '--no-interaction' => true])
         ->expectsOutputToContain('Could not create directory')
         ->assertFailed();
+});
+
+it('names an unreadable connection instead of crashing on the interactive path', function () {
+    // A stock app's connection list is not a list of connections DeadDrop can
+    // read: `sqlsrv` is not supported at all, and `pgsql` is usually not up.
+    config(['database.connections' => [
+        'dd_test' => config('database.connections.dd_test'),
+        'broken' => ['driver' => 'sqlsrv', 'host' => 'nowhere', 'database' => 'x'],
+    ]]);
+
+    $path = tempDirectory();
+
+    $this->artisan('dead-drop:init', ['--path' => $path])
+        ->expectsOutputToContain('broken (unavailable: Unsupported database driver [sqlsrv].)')
+        ->expectsChoice('Which connections should DeadDrop enroll?', ['dd_test'], ['dd_test' => 'dd_test (8 tables)'])
+        ->expectsQuestion('Any large tables to skip?', [])
+        ->assertSuccessful();
+
+    expect($path.'/dd_test.php')->toBeFile()
+        ->and($path.'/broken.php')->not->toBeFile();
+});
+
+it('forces a table chosen at the skip prompt to skip', function () {
+    config(['database.connections' => ['dd_test' => config('database.connections.dd_test')]]);
+
+    $path = tempDirectory();
+
+    $this->artisan('dead-drop:init', ['--path' => $path])
+        ->expectsQuestion('Which connections should DeadDrop enroll?', ['dd_test'])
+        ->expectsQuestion('Any large tables to skip?', ['dd_test.countries'])
+        ->assertSuccessful();
+
+    expect((require $path.'/dd_test.php')['countries']['class'])->toBe('skip');
 });

@@ -121,3 +121,15 @@ it('fails clearly when two connections reference each other', function () {
 
     Graph::fromConfig((new ConfigLoader)->loadAll($path))->connectionOrder();
 })->throws(CircularConnectionException::class, 'dd_test');
+
+it('pins a connection to its write PDO once it holds a key table', function () {
+    $repository = app(KeySetRepository::class);
+
+    $repository->create('dd_test', 'companies', ColumnType::Integer);
+
+    // A temporary key table only exists on the session that created it, so a
+    // read/write-split connection must stop reading from its replica.
+    expect(DB::connection('dd_test')->getReadPdo())->toBe(DB::connection('dd_test')->getPdo());
+
+    $repository->dropAll();
+});

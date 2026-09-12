@@ -1,7 +1,7 @@
 {
     "$schema": "https://getcomposer.org/schema.json",
     "name": "kirilldakhniuk/dead-drop",
-    "description": "Dead Drop is a Laravel package that discovers your database schema, builds a reviewed per-connection config describing how each table should be classified, scoped and redacted, detects drift between that config and the live schema, and plans a referentially-complete row extraction — a root row and everything it points to or that points at it. Extraction, redaction and loading are not implemented yet; this phase only discovers, reviews and plans. Requires PHP ^8.3 and Laravel 12 or 13.",
+    "description": "Plan and dump redacted, referentially-complete slices of production data for local and staging databases.",
     "keywords": [
         "laravel",
         "kirilldakhniuk",

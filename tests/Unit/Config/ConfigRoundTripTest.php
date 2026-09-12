@@ -81,3 +81,44 @@ it('renders human references on a skip table instead of dropping them', function
 
     expect($source)->toContain("'legacy_ref' => ['legacy.id', 'source' => 'manual'],");
 });
+
+/**
+ * Writes a hand-edited config file and returns the message loading it fails
+ * with, so a typo's diagnostics can be asserted whole.
+ */
+function configLoadFailure(string $body): string
+{
+    $directory = tempDirectory();
+    $path = $directory.'/mysql.php';
+    file_put_contents($path, "<?php\n\nreturn {$body};\n");
+
+    try {
+        (new ConfigLoader)->load('mysql', $directory);
+    } catch (InvalidArgumentException $e) {
+        return str_replace($path, '<path>', $e->getMessage());
+    }
+
+    return 'no exception';
+}
+
+it('names the file, the table and the accepted values for an unknown class', function () {
+    expect(configLoadFailure("['orders' => ['class' => 'lookupp', 'columns' => ['id']]]"))
+        ->toContain('<path>')
+        ->toContain('Table [orders]')
+        ->toContain('lookupp')
+        ->toContain('data, lookup, skip');
+});
+
+it('refuses a table with no class instead of silently treating it as data', function () {
+    expect(configLoadFailure("['orders' => ['columns' => ['id']]]"))
+        ->toContain('<path>')
+        ->toContain("Table [orders] is missing a valid 'class' (data, lookup, skip).");
+});
+
+it('names the file, the column and the accepted values for an unknown reference source', function () {
+    expect(configLoadFailure("['orders' => ['class' => 'data', 'columns' => ['id'], 'references' => ['company_id' => ['companies.id', 'source' => 'psychic']]]]"))
+        ->toContain('<path>')
+        ->toContain('Reference [orders.company_id]')
+        ->toContain('psychic')
+        ->toContain('fk, eloquent, guessed, manual');
+});

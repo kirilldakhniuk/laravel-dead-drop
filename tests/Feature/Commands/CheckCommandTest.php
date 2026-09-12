@@ -62,3 +62,11 @@ it('fails when a connection has no config file', function () {
         ->expectsOutputToContain('dead-drop:init')
         ->assertExitCode(1);
 });
+
+it('fails when the directory holds no config at all', function () {
+    $path = tempDirectory();
+
+    $this->artisan('dead-drop:check', ['--path' => $path])
+        ->expectsOutputToContain("No DeadDrop config found in [{$path}] — run dead-drop:init")
+        ->assertExitCode(1);
+});

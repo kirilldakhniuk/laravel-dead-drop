@@ -23,6 +23,7 @@ use DeadDrop\DeadDrop\Schema\DatabaseSchema;
 use DeadDrop\DeadDrop\Schema\Introspector;
 use DeadDrop\DeadDrop\Schema\Table;
 use Illuminate\Console\Command;
+use Illuminate\Support\Arr;
 use Illuminate\Support\Str;
 use Throwable;
 
@@ -69,8 +70,8 @@ final class InitCommand extends Command
     ): int {
         // `--connection` and `--skip` are declared `=*`, so Symfony always
         // hands back an array; only its entries need normalising.
-        $connections = array_values(array_map('strval', $this->option('connection')));
-        $skip = array_values(array_map('strval', $this->option('skip')));
+        $connections = array_values(array_map('strval', Arr::wrap($this->option('connection'))));
+        $skip = array_values(array_map('strval', Arr::wrap($this->option('skip'))));
 
         if ($connections === []) {
             if (! $this->input->isInteractive()) {

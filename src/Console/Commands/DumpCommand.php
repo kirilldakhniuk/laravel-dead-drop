@@ -27,6 +27,7 @@ use DeadDrop\DeadDrop\Schema\Introspector;
 use DeadDrop\DeadDrop\Schema\SchemaSet;
 use Illuminate\Console\Command;
 use Illuminate\Database\QueryException;
+use Illuminate\Support\Arr;
 use Illuminate\Support\Facades\Storage;
 use InvalidArgumentException;
 use RuntimeException;
@@ -170,7 +171,7 @@ final class DumpCommand extends Command
      */
     private function config(ConfigSet $config): ConfigSet
     {
-        $only = array_values(array_map('strval', $this->option('connection')));
+        $only = array_values(array_map('strval', Arr::wrap($this->option('connection'))));
 
         if ($only === []) {
             return $config;

@@ -13,6 +13,7 @@ use DeadDrop\DeadDrop\Redaction\RedactionRules;
 use DeadDrop\DeadDrop\Schema\DatabaseSchema;
 use DeadDrop\DeadDrop\Schema\Introspector;
 use Illuminate\Console\Command;
+use Illuminate\Support\Arr;
 
 /**
  * Compares each connection's live schema against its reviewed config and
@@ -127,7 +128,7 @@ final class CheckCommand extends Command
      */
     private function connections(ConfigLoader $loader, string $directory): array
     {
-        $connections = array_values(array_map('strval', $this->option('connection')));
+        $connections = array_values(array_map('strval', Arr::wrap($this->option('connection'))));
 
         return $connections !== [] ? $connections : array_values($loader->loadAll($directory)->connections());
     }

@@ -15,7 +15,14 @@ use Illuminate\Database\Connection;
  */
 final class NdjsonLoader implements Loader
 {
+    /**
+     * The most rows one insert ever carries; wide tables use fewer, because
+     * every column of every row is a bound parameter and SQLite stops at
+     * 32,766 of them.
+     */
     private const int CHUNK = 500;
+
+    private const int MAX_BINDINGS = 30000;
 
     public function format(): string
     {
@@ -29,11 +36,12 @@ final class NdjsonLoader implements Loader
     {
         $written = 0;
         $chunk = [];
+        $size = $this->chunkSize($table);
 
         foreach ($rows as $row) {
             $chunk[] = $row;
 
-            if (count($chunk) === self::CHUNK) {
+            if (count($chunk) === $size) {
                 $written += $this->insert($table, $chunk, $target);
                 $chunk = [];
             }
@@ -44,6 +52,11 @@ final class NdjsonLoader implements Loader
         }
 
         return $written;
+    }
+
+    private function chunkSize(TableManifest $table): int
+    {
+        return min(self::CHUNK, max(1, intdiv(self::MAX_BINDINGS, max(1, count($table->columns)))));
     }
 
     /**

@@ -13,6 +13,7 @@ use DeadDrop\DeadDrop\Schema\DatabaseSchema;
 use DeadDrop\DeadDrop\Schema\Introspector;
 use Illuminate\Database\Connection;
 use Illuminate\Support\Facades\DB;
+use InvalidArgumentException;
 use RuntimeException;
 
 /**
@@ -37,6 +38,7 @@ final class PullRunner
      * @param  Closure(string, int): void|null  $progress  called with the table key and rows written, after each table
      *
      * @throws RuntimeException when the target is missing a column the artifact carries, or a table loads a different number of rows than the manifest promises
+     * @throws InvalidArgumentException when the manifest names a format this installation has no loader for
      */
     public function run(Manifest $manifest, ArtifactReader $reader, string $targetConnection, ?Closure $progress = null): PullReport
     {
@@ -100,6 +102,20 @@ final class PullRunner
 
     private function assertTargetFits(Manifest $manifest, DatabaseSchema $schema): void
     {
+        /** @var array<string, string> $seen */
+        $seen = [];
+
+        foreach ($manifest->tables as $table) {
+            // A target is one database, so two connections that both carry a
+            // `users` table would load one over the other; the operator has to
+            // split the pull rather than silently lose a slice.
+            if (($seen[$table->table] ?? $table->connection) !== $table->connection) {
+                throw new RuntimeException("Artifact holds table [{$table->table}] from more than one connection; a single target cannot hold both.");
+            }
+
+            $seen[$table->table] = $table->connection;
+        }
+
         foreach ($manifest->tables as $table) {
             $target = $schema->table($table->table);
 

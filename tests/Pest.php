@@ -57,6 +57,14 @@ function dumpFixture(string $root = 'dd_test.companies:1', ?string $configDirect
     return (new ArtifactReader(Storage::disk('local'), 'dead-drops'))->ids()[0];
 }
 
+/**
+ * The id of the newest artifact on the faked disk.
+ */
+function latestArtifactId(): string
+{
+    return (new ArtifactReader(Storage::disk('local'), 'dead-drops'))->ids()[0];
+}
+
 function traverseFixture(string $rootSpec, ?string $configDirectory = null, ?DateTimeInterface $since = null): TraversalResult
 {
     $directory = $configDirectory ?? initFixtureConfig();

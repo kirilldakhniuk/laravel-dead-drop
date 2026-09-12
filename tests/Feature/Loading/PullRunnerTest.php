@@ -76,7 +76,24 @@ it('rolls a table back on a row count mismatch and restores foreign key checks',
     $tables = array_map(fn (TableManifest $t) => $t->table === 'orders' ? new TableManifest($t->connection, $t->table, $t->file, $t->format, 5, $t->bytes, $t->primaryKey, $t->columns, $t->redacted) : $t, $manifest->tables);
     $tampered = new Manifest($manifest->id, $manifest->status, $manifest->createdAt, $manifest->packageVersion, $manifest->root, $manifest->since, $manifest->executor, $manifest->connections, $tables, $manifest->unresolved);
 
+    // `companies` loads before `orders`, so its surviving rows are the proof
+    // that the rollback took only the table that failed.
     expect(fn () => app(PullRunner::class)->run($tampered, $reader, 'dd_target'))->toThrow(RuntimeException::class, 'Row count mismatch for [dd_test.orders]')
         ->and(DB::connection('dd_target')->table('orders')->count())->toBe(0)
+        ->and(DB::connection('dd_target')->table('companies')->count())->toBeGreaterThan(0)
         ->and((int) DB::connection('dd_target')->scalar('PRAGMA foreign_keys'))->toBe(1);
+});
+
+it('refuses a manifest holding one bare table name from two connections', function () {
+    $columns = [['name' => 'id', 'type' => 'int']];
+    $manifest = new Manifest('20260101-000000-aaaaaa', Manifest::STATUS_COMPLETE, '2026-01-01T00:00:00+00:00', 'dev', 'a.users:1', null, 'php', [], [
+        new TableManifest('a', 'users', 'a.users.ndjson.gz', 'ndjson', 0, 0, 'id', $columns, []),
+        new TableManifest('b', 'users', 'b.users.ndjson.gz', 'ndjson', 0, 0, 'id', $columns, []),
+    ], []);
+
+    DB::connection('dd_target')->table('users')->insert(['id' => 10, 'company_id' => 1, 'email' => 'keep@example.test', 'password' => 'x', 'created_by' => null, 'failed_job_id' => null]);
+
+    expect(fn () => app(PullRunner::class)->run($manifest, new ArtifactReader(Storage::disk('local'), 'dead-drops'), 'dd_target'))
+        ->toThrow(RuntimeException::class, 'Artifact holds table [users] from more than one connection; a single target cannot hold both.')
+        ->and(DB::connection('dd_target')->table('users')->count())->toBe(1);
 });

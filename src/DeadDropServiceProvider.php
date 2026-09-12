@@ -8,6 +8,7 @@ use DeadDrop\DeadDrop\Console\Commands\CheckCommand;
 use DeadDrop\DeadDrop\Console\Commands\DumpCommand;
 use DeadDrop\DeadDrop\Console\Commands\DumpsCommand;
 use DeadDrop\DeadDrop\Console\Commands\InitCommand;
+use DeadDrop\DeadDrop\Console\Commands\PullCommand;
 use DeadDrop\DeadDrop\Extraction\ExecutorManager;
 use DeadDrop\DeadDrop\Inference\Sources\EloquentSource;
 use DeadDrop\DeadDrop\Loading\LoaderRegistry;
@@ -51,6 +52,7 @@ class DeadDropServiceProvider extends ServiceProvider
             CheckCommand::class,
             DumpCommand::class,
             DumpsCommand::class,
+            PullCommand::class,
         ]);
     }
 }

@@ -95,6 +95,20 @@ it('normalises a spelled out postgres type', function () {
         ->and($driver->normaliseType('double precision'))->toBe(ColumnType::Decimal);
 });
 
+it('relaxes and restores the session around a load', function () {
+    SchemaBuilder::migrate('dd_test');
+    $driver = new SqliteDriver;
+    $connection = DB::connection('dd_test');
+
+    $driver->beginLoading($connection);
+    $connection->table('orders')->insert(['id' => 600, 'company_id' => 999, 'user_id' => 1, 'customer_id' => null, 'total' => 1, 'created_at' => null]);
+    expect($connection->table('orders')->where('id', 600)->exists())->toBeTrue();
+
+    $driver->endLoading($connection);
+    expect(fn () => $connection->table('orders')->insert(['id' => 601, 'company_id' => 999, 'user_id' => 1, 'customer_id' => null, 'total' => 1, 'created_at' => null]))
+        ->toThrow(QueryException::class);
+});
+
 it('toggles foreign key checks', function () {
     SchemaBuilder::migrate('dd_test');
     $driver = new SqliteDriver;

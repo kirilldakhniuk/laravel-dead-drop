@@ -92,6 +92,16 @@ final class PostgresDriver implements DatabaseDriver
         $connection->statement('SET session_replication_role = DEFAULT');
     }
 
+    public function beginLoading(Connection $connection): void
+    {
+        $this->disableForeignKeyChecks($connection);
+    }
+
+    public function endLoading(Connection $connection): void
+    {
+        $this->enableForeignKeyChecks($connection);
+    }
+
     public function quote(string $identifier): string
     {
         return '"'.str_replace('"', '""', $identifier).'"';

@@ -85,6 +85,16 @@ final class SqliteDriver implements DatabaseDriver
         $connection->statement('PRAGMA foreign_keys = ON');
     }
 
+    public function beginLoading(Connection $connection): void
+    {
+        $this->disableForeignKeyChecks($connection);
+    }
+
+    public function endLoading(Connection $connection): void
+    {
+        $this->enableForeignKeyChecks($connection);
+    }
+
     public function quote(string $identifier): string
     {
         return '"'.str_replace('"', '""', $identifier).'"';

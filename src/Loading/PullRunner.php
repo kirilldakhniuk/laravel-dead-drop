@@ -57,7 +57,7 @@ final class PullRunner
         /** @var list<string> $skipped */
         $skipped = [];
 
-        $driver->disableForeignKeyChecks($db);
+        $driver->beginLoading($db);
 
         try {
             foreach ($manifest->tables as $table) {
@@ -74,7 +74,7 @@ final class PullRunner
                 $progress?->__invoke($table->key(), $written);
             }
         } finally {
-            $driver->enableForeignKeyChecks($db);
+            $driver->endLoading($db);
         }
 
         return new PullReport($loaded, $skipped);
@@ -100,8 +100,13 @@ final class PullRunner
             });
         } catch (QueryException $e) {
             // A pull touches many tables; the engine's message names a column
-            // and a constraint but never which of them was being written.
-            throw new RuntimeException("Loading [{$table->key()}] failed: {$e->getMessage()}", previous: $e);
+            // and a constraint but never which of them was being written. Only
+            // the engine's own text is repeated: Laravel appends the SQL and
+            // its bindings, which for an insert is the row itself — the one
+            // thing a redacted dump must not print.
+            $message = explode(' (Connection:', $e->getMessage(), 2)[0];
+
+            throw new RuntimeException("Loading [{$table->key()}] failed: {$message}", previous: $e);
         }
 
         return $written;

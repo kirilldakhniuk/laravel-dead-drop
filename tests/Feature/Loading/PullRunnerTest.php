@@ -8,6 +8,7 @@ use DeadDrop\DeadDrop\Artifacts\TableManifest;
 use DeadDrop\DeadDrop\Loading\PullReport;
 use DeadDrop\DeadDrop\Loading\PullRunner;
 use DeadDrop\DeadDrop\Tests\Fixtures\SchemaBuilder;
+use Illuminate\Database\QueryException;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Facades\Storage;
@@ -111,7 +112,7 @@ it('refuses before writing when the target needs a column the artifact has no va
         ->and(DB::connection('dd_target')->table('companies')->count())->toBe(0);
 });
 
-it('names the table when the target refuses a row', function () {
+it('names the table when the target refuses a row, without echoing the row', function () {
     $id = dumpFixture('dd_test.companies:1', initFixtureConfig());
 
     // A CHECK the target has and the source did not: the engine's message
@@ -119,7 +120,25 @@ it('names the table when the target refuses a row', function () {
     DB::connection('dd_target')->statement('DROP TABLE order_items');
     DB::connection('dd_target')->statement('CREATE TABLE order_items (id integer primary key autoincrement, order_id integer not null, sku varchar not null check (sku = \'nothing\'))');
 
-    expect(fn () => pullFixtureArtifact($id))->toThrow(RuntimeException::class, 'Loading [dd_test.order_items] failed:');
+    try {
+        pullFixtureArtifact($id);
+    } catch (RuntimeException $e) {
+        // Laravel appends `(Connection: …, SQL: insert into … values (…))`,
+        // and for an insert those bindings are the row itself — the one thing
+        // a redacted dump must not print back out.
+        expect($e->getMessage())->toStartWith('Loading [dd_test.order_items] failed:')
+            ->and($e->getMessage())->not->toContain('SQL:')
+            ->and($e->getMessage())->not->toContain('SKU-1')
+            ->and($e->getPrevious())->toBeInstanceOf(QueryException::class)
+            // The row is in the exception this one wraps, which is what makes
+            // the two assertions above worth making.
+            ->and($e->getPrevious()?->getMessage())->toContain('SQL:')
+            ->and($e->getPrevious()?->getMessage())->toContain('SKU-1');
+
+        return;
+    }
+
+    $this->fail('The load was expected to fail.');
 });
 
 it('refuses a manifest holding one bare table name from two connections', function () {

@@ -43,5 +43,18 @@ interface DatabaseDriver
     /** Restore referential-integrity enforcement for this session. */
     public function enableForeignKeyChecks(Connection $connection): void;
 
+    /**
+     * Prepare the session for bulk loading: integrity enforcement off, and any
+     * engine-specific strictness that would reject values the source accepted.
+     * A dump is a faithful copy, so whatever the source held has to go in —
+     * a legacy `0000-00-00` datetime included.
+     */
+    public function beginLoading(Connection $connection): void;
+
+    /**
+     * Restore everything `beginLoading()` relaxed, whatever the load did.
+     */
+    public function endLoading(Connection $connection): void;
+
     public function quote(string $identifier): string;
 }

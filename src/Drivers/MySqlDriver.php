@@ -11,6 +11,30 @@ final class MySqlDriver implements DatabaseDriver
 {
     use NormalisesTypes;
 
+    /**
+     * The session modes that refuse values a source can nonetheless hold: a
+     * legacy `0000-00-00 00:00:00` datetime, a truncated string, a division
+     * by zero. A load copies what the source had, so they come off for the
+     * load and go straight back on.
+     *
+     * @var list<string>
+     */
+    private const array RELAXED_MODES = [
+        'STRICT_TRANS_TABLES',
+        'STRICT_ALL_TABLES',
+        'NO_ZERO_DATE',
+        'NO_ZERO_IN_DATE',
+        'ERROR_FOR_DIVISION_BY_ZERO',
+    ];
+
+    /**
+     * The `sql_mode` each connection had before its load, keyed by connection
+     * name, so a run against two connections restores each to its own.
+     *
+     * @var array<string, string>
+     */
+    private array $sqlModes = [];
+
     public function name(): string
     {
         return 'mysql';
@@ -89,6 +113,49 @@ final class MySqlDriver implements DatabaseDriver
     public function enableForeignKeyChecks(Connection $connection): void
     {
         $connection->statement('SET FOREIGN_KEY_CHECKS = 1');
+    }
+
+    public function beginLoading(Connection $connection): void
+    {
+        $this->disableForeignKeyChecks($connection);
+
+        $current = $connection->scalar('select @@SESSION.sql_mode');
+
+        if (! is_string($current)) {
+            return; // nothing to relax, and nothing to restore
+        }
+
+        $this->sqlModes[$connection->getName() ?? ''] = $current;
+
+        $connection->statement('SET SESSION sql_mode = ?', [$this->relaxed($current)]);
+    }
+
+    public function endLoading(Connection $connection): void
+    {
+        $name = $connection->getName() ?? '';
+
+        if (array_key_exists($name, $this->sqlModes)) {
+            $connection->statement('SET SESSION sql_mode = ?', [$this->sqlModes[$name]]);
+
+            unset($this->sqlModes[$name]);
+        }
+
+        $this->enableForeignKeyChecks($connection);
+    }
+
+    /**
+     * The session's own `sql_mode` with only the strictness a faithful copy
+     * cannot satisfy removed — every other mode the operator set is left
+     * exactly where it was.
+     */
+    private function relaxed(string $sqlMode): string
+    {
+        $modes = array_filter(
+            array_map(trim(...), explode(',', $sqlMode)),
+            fn (string $mode): bool => $mode !== '' && ! in_array(strtoupper($mode), self::RELAXED_MODES, true),
+        );
+
+        return implode(',', $modes);
     }
 
     public function quote(string $identifier): string

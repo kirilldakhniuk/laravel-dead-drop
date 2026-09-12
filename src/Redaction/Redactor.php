@@ -10,9 +10,11 @@ use InvalidArgumentException;
 
 /**
  * Applies a table's `redact` map to a row at extraction time. Built once per
- * table from a reviewed `TableConfig`; the gate (`RedactionRules`) is what
- * surfaces a bad transformer spec, so this never throws over one — it just
- * skips the column and leaves it untouched.
+ * table from a reviewed `TableConfig`, and only from one the gate
+ * (`RedactionRules`) accepts: the gate runs here too, so a caller that
+ * skipped it still cannot extract rows through an unreviewed map. Past that
+ * point a column whose transformer cannot be built is skipped and left
+ * untouched rather than thrown over.
  */
 final class Redactor
 {
@@ -23,8 +25,14 @@ final class Redactor
         private readonly array $transformers,
     ) {}
 
-    public static function forTable(TableConfig $config, Table $table, RedactionContext $context, ?TransformerFactory $factory = null): self
+    public static function forTable(TableConfig $config, Table $table, RedactionContext $context, ?TransformerFactory $factory = null, ?RedactionRules $rules = null): self
     {
+        $violations = ($rules ?? new RedactionRules)->violations($config, $table);
+
+        if ($violations !== []) {
+            throw new InvalidArgumentException("Invalid redaction config for [{$table->name}]: ".implode('; ', $violations));
+        }
+
         $factory ??= new TransformerFactory;
         $primaryKey = $table->primaryKey() ?? 'id';
         $transformers = [];

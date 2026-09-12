@@ -54,6 +54,10 @@ final class TableFileWriter
      */
     public function finish(): array
     {
+        if ($this->finished) {
+            throw new RuntimeException('This table file was already finished or aborted.');
+        }
+
         try {
             if (gzclose($this->handle) === false) {
                 throw new RuntimeException("Unable to close the gzip stream for [{$this->tempPath}].");

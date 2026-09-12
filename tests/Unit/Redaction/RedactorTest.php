@@ -32,9 +32,13 @@ it('redacts only the configured columns', function () {
 });
 
 it('lists its redacted columns sorted', function () {
-    expect(usersRedactor(['password' => 'null', 'email' => 'hash'])->columns())->toBe(['email', 'password']);
+    expect(usersRedactor(['password' => 'fixed:x', 'email' => 'hash'])->columns())->toBe(['email', 'password']);
 });
 
 it('ignores a configured column missing from the row', function () {
     expect(usersRedactor(['email' => 'hash'])->apply(['id' => 1]))->toBe(['id' => 1]);
 });
+
+it('refuses to build from an invalid redaction map', function () {
+    usersRedactor(['id' => 'hash']);
+})->throws(InvalidArgumentException::class, 'primary key columns cannot be redacted');

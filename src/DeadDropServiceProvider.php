@@ -7,6 +7,7 @@ namespace DeadDrop\DeadDrop;
 use DeadDrop\DeadDrop\Console\Commands\CheckCommand;
 use DeadDrop\DeadDrop\Console\Commands\DumpCommand;
 use DeadDrop\DeadDrop\Console\Commands\InitCommand;
+use DeadDrop\DeadDrop\Extraction\ExecutorManager;
 use DeadDrop\DeadDrop\Inference\Sources\EloquentSource;
 use DeadDrop\DeadDrop\Planning\KeySetRepository;
 use Illuminate\Contracts\Foundation\Application;
@@ -19,6 +20,8 @@ class DeadDropServiceProvider extends ServiceProvider
         $this->mergeConfigFrom(__DIR__.'/../config/dead-drop.php', 'dead-drop');
 
         $this->app->scoped(KeySetRepository::class);
+
+        $this->app->singleton(ExecutorManager::class);
 
         $this->app->singleton(EloquentSource::class, fn (Application $app): EloquentSource => new EloquentSource(
             array_values(array_map(

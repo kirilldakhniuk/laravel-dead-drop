@@ -8,6 +8,7 @@ use DateMalformedStringException;
 use DateTimeImmutable;
 use DeadDrop\DeadDrop\Config\ConfigLoader;
 use DeadDrop\DeadDrop\Config\ConfigSet;
+use DeadDrop\DeadDrop\Extraction\ExtractionGate;
 use DeadDrop\DeadDrop\Planning\CircularConnectionException;
 use DeadDrop\DeadDrop\Planning\ExtractionPlan;
 use DeadDrop\DeadDrop\Planning\KeySetRepository;
@@ -38,7 +39,7 @@ final class DumpCommand extends Command
     /** @var string */
     protected $description = 'Plan the dump of a root row set and report what it would extract';
 
-    public function handle(Planner $planner, ConfigLoader $loader, Introspector $introspector, KeySetRepository $keys): int
+    public function handle(Planner $planner, ConfigLoader $loader, Introspector $introspector, KeySetRepository $keys, ExtractionGate $gate): int
     {
         if ($this->option('full') === true) {
             $this->error('--full is not implemented yet');
@@ -77,7 +78,18 @@ final class DumpCommand extends Command
         }
 
         try {
-            $plan = $planner->plan($root, $config, $this->schemas($config, $introspector), $since);
+            $schemas = $this->schemas($config, $introspector);
+            $plan = $planner->plan($root, $config, $schemas, $since);
+
+            $rootIdViolations = $gate->rootIds($root, $config, $schemas);
+
+            if ($rootIdViolations !== []) {
+                foreach ($rootIdViolations as $violation) {
+                    $this->error($violation);
+                }
+
+                return self::FAILURE;
+            }
         } catch (UnsupportedTableException|CircularConnectionException|InvalidArgumentException $e) {
             $this->error($e->getMessage());
 

@@ -94,3 +94,11 @@ it('fails clearly when a hand written exclude fragment is not valid SQL', functi
         ->expectsOutputToContain('Planning failed')
         ->assertFailed();
 });
+
+it('refuses a dry run whose root id does not exist', function () {
+    $path = initFixtureConfig();
+
+    $this->artisan('dead-drop:dump', ['--root' => 'dd_test.companies:999', '--path' => $path, '--dry-run' => true])
+        ->expectsOutputToContain('Root id 999 does not exist in dd_test.companies')
+        ->assertFailed();
+});

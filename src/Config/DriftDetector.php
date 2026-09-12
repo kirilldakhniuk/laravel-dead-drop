@@ -123,8 +123,14 @@ final class DriftDetector
                 }
             }
 
+            // A primary key or a reference column cannot carry a `redact`
+            // entry at all (`RedactionRules` refuses every spec on one), so
+            // demanding a decision for one would leave it with no legal
+            // state: `check` would fail with the entry and without it.
+            $keys = $this->keyColumns($tableConfig, $table);
+
             foreach ($this->sensitive->detect($table) as $column => $suggestion) {
-                if (! array_key_exists($column, $tableConfig->redact)) {
+                if (! array_key_exists($column, $tableConfig->redact) && ! isset($keys[$column])) {
                     $columns[] = "{$tableName}.{$column}";
                 }
             }
@@ -133,7 +139,7 @@ final class DriftDetector
             // `review`; deleting that line is not the same as making it, so
             // the column is undecided again rather than silently allowed.
             foreach ($table->columns as $column) {
-                if ($column->type === ColumnType::Json && ! array_key_exists($column->name, $tableConfig->redact)) {
+                if ($column->type === ColumnType::Json && ! array_key_exists($column->name, $tableConfig->redact) && ! isset($keys[$column->name])) {
                     $columns[] = "{$tableName}.{$column->name}";
                 }
             }
@@ -144,6 +150,28 @@ final class DriftDetector
         sort($columns);
 
         return $columns;
+    }
+
+    /**
+     * The columns no `redact` entry may name: the single-column primary key
+     * and every reference column the config records.
+     *
+     * @return array<string, true>
+     */
+    private function keyColumns(TableConfig $config, Table $table): array
+    {
+        $keys = [];
+        $primaryKey = $table->primaryKey();
+
+        if ($primaryKey !== null) {
+            $keys[$primaryKey] = true;
+        }
+
+        foreach (array_keys($config->references) as $column) {
+            $keys[$column] = true;
+        }
+
+        return $keys;
     }
 
     /**

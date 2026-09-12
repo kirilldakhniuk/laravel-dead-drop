@@ -50,6 +50,21 @@ it('hands back a suggestion its own gate would reject as review', function () {
     expect($config['companies']['redact']['api_key'])->toBe('review');
 });
 
+it('writes no redact entry for a key column with a sensitive name', function () {
+    // `api_key` suggests `null`, but a primary key can carry no entry at all —
+    // writing one would leave the column with no state check accepts.
+    Schema::connection('dd_test')->create('licences', function ($t) {
+        $t->string('api_key')->primary();
+        $t->string('name');
+    });
+
+    $path = initFixtureConfig();
+
+    expect((require $path.'/dd_test.php')['licences'])->not->toHaveKey('redact');
+
+    $this->artisan('dead-drop:check', ['--connection' => ['dd_test'], '--path' => $path])->assertExitCode(0);
+});
+
 it('forces tables named in --skip to skip', function () {
     $path = tempDirectory();
 

@@ -84,16 +84,20 @@ final class RedactionRules
             return "{$prefix}: column does not exist";
         }
 
-        if ($spec === 'review') {
-            return "{$prefix}: 'review' must be replaced with a decision";
-        }
-
+        // Before the `review` check: a key column has no decision to make, so
+        // being told to replace the placeholder with one would send the
+        // operator looking for a spec that does not exist. The entry itself
+        // is the problem, whatever it says.
         if ($columnName === $primaryKey) {
             return "{$prefix}: primary key columns cannot be redacted";
         }
 
         if (array_key_exists($columnName, $config->references)) {
             return "{$prefix}: reference columns cannot be redacted";
+        }
+
+        if ($spec === 'review') {
+            return "{$prefix}: 'review' must be replaced with a decision";
         }
 
         [$name] = array_pad(explode(':', $spec, 2), 2, null);

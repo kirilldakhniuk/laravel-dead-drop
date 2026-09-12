@@ -45,13 +45,18 @@ it('rejects review placeholders', function () {
 });
 
 it('rejects redacting the primary key', function () {
-    expect(violationsFor('users', ['id' => 'hash']))->toBe(['users.id: primary key columns cannot be redacted']);
+    // Including a `review` placeholder: there is no decision to replace it
+    // with, so the entry itself has to go.
+    expect(violationsFor('users', ['id' => 'hash']))->toBe(['users.id: primary key columns cannot be redacted'])
+        ->and(violationsFor('users', ['id' => 'review']))->toBe(['users.id: primary key columns cannot be redacted'])
+        ->and(violationsFor('users', ['id' => 'keep']))->toBe(['users.id: primary key columns cannot be redacted']);
 });
 
 it('rejects redacting a reference column', function () {
     $references = ['company_id' => new Reference(null, 'companies', 'id', true, EdgeSource::Guessed)];
 
-    expect(violationsFor('users', ['company_id' => 'null'], $references))->toBe(['users.company_id: reference columns cannot be redacted']);
+    expect(violationsFor('users', ['company_id' => 'null'], $references))->toBe(['users.company_id: reference columns cannot be redacted'])
+        ->and(violationsFor('users', ['company_id' => 'review'], $references))->toBe(['users.company_id: reference columns cannot be redacted']);
 });
 
 it('rejects null on a not null column', function () {

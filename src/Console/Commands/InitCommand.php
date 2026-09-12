@@ -307,6 +307,13 @@ final class InitCommand extends Command
             }
         }
 
+        // A primary key or a reference column carries the shape of the slice,
+        // not its content, and can never carry a `redact` entry at all — not
+        // even `keep` or `review`. A sensitive-looking name on one (an
+        // `api_key` primary key, a `*_token_id` foreign key) is a suggestion
+        // with nowhere to go, so no entry is written for it.
+        $redact = array_diff_key($redact, $this->keyColumns($table, $references));
+
         $config = new TableConfig(
             name: $table->name,
             class: $class,
@@ -319,6 +326,29 @@ final class InitCommand extends Command
         );
 
         return $this->reviewable($config, $table, $rules);
+    }
+
+    /**
+     * The columns no `redact` entry may name: the single-column primary key
+     * and every reference column.
+     *
+     * @param  array<string, Reference>  $references
+     * @return array<string, true>
+     */
+    private function keyColumns(Table $table, array $references): array
+    {
+        $keys = [];
+        $primaryKey = $table->primaryKey();
+
+        if ($primaryKey !== null) {
+            $keys[$primaryKey] = true;
+        }
+
+        foreach (array_keys($references) as $column) {
+            $keys[$column] = true;
+        }
+
+        return $keys;
     }
 
     /**

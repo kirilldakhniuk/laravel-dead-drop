@@ -67,11 +67,10 @@ final class InitCommand extends Command
         EloquentSource $eloquentSource,
         RedactionRules $rules,
     ): int {
-        $connectionOption = $this->option('connection');
-        $connections = is_array($connectionOption) ? array_values(array_map('strval', $connectionOption)) : [];
-
-        $skipOption = $this->option('skip');
-        $skip = is_array($skipOption) ? array_values(array_map('strval', $skipOption)) : [];
+        // `--connection` and `--skip` are declared `=*`, so Symfony always
+        // hands back an array; only its entries need normalising.
+        $connections = array_values(array_map('strval', $this->option('connection')));
+        $skip = array_values(array_map('strval', $this->option('skip')));
 
         if ($connections === []) {
             if (! $this->input->isInteractive()) {

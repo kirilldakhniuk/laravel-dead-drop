@@ -6,6 +6,7 @@ namespace DeadDrop\DeadDrop\Loading;
 
 use DeadDrop\DeadDrop\Artifacts\ArtifactReader;
 use DeadDrop\DeadDrop\Artifacts\TableManifest;
+use DeadDrop\DeadDrop\Schema\Table;
 use Illuminate\Database\Connection;
 
 /**
@@ -20,7 +21,8 @@ interface Loader
     public function format(): string;
 
     /**
+     * @param  Table  $schema  the target's table as introspected, for the shape the insert has to fit
      * @return int the number of rows written
      */
-    public function load(TableManifest $table, ArtifactReader $reader, string $artifactId, Connection $target): int;
+    public function load(TableManifest $table, ArtifactReader $reader, string $artifactId, Connection $target, Table $schema): int;
 }

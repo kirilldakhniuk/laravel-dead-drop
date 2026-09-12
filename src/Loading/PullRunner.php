@@ -11,6 +11,7 @@ use DeadDrop\DeadDrop\Artifacts\TableManifest;
 use DeadDrop\DeadDrop\Drivers\DriverFactory;
 use DeadDrop\DeadDrop\Schema\DatabaseSchema;
 use DeadDrop\DeadDrop\Schema\Introspector;
+use DeadDrop\DeadDrop\Schema\Table;
 use Illuminate\Database\Connection;
 use Illuminate\Database\QueryException;
 use Illuminate\Support\Facades\DB;
@@ -61,13 +62,15 @@ final class PullRunner
 
         try {
             foreach ($manifest->tables as $table) {
-                if ($schema->table($table->table) === null) {
+                $target = $schema->table($table->table);
+
+                if ($target === null) {
                     $skipped[] = "{$table->key()}: not present on the target";
 
                     continue;
                 }
 
-                $written = $this->replace($table, $manifest, $reader, $db);
+                $written = $this->replace($table, $manifest, $reader, $db, $target);
 
                 $loaded[$table->key()] = $written;
 
@@ -80,16 +83,16 @@ final class PullRunner
         return new PullReport($loaded, $skipped);
     }
 
-    private function replace(TableManifest $table, Manifest $manifest, ArtifactReader $reader, Connection $db): int
+    private function replace(TableManifest $table, Manifest $manifest, ArtifactReader $reader, Connection $db, Table $target): int
     {
         $loader = $this->loaders->for($table->format);
         $written = 0;
 
         try {
-            $db->transaction(function () use ($table, $manifest, $reader, $db, $loader, &$written): void {
+            $db->transaction(function () use ($table, $manifest, $reader, $db, $loader, $target, &$written): void {
                 $db->table($table->table)->delete();
 
-                $written = $loader->load($table, $reader, $manifest->id, $db);
+                $written = $loader->load($table, $reader, $manifest->id, $db, $target);
 
                 // A short table means the artifact file and its manifest entry
                 // disagree, and a slice that is quietly incomplete is worse than
@@ -156,7 +159,9 @@ final class PullRunner
             // the database can supply one; otherwise every insert fails, and
             // it should fail before the table is emptied.
             foreach ($target->columns as $column) {
-                if (! $column->nullable && $column->default === null && ! $column->autoIncrement && ! in_array($column->name, $carried, true)) {
+                // A generated column never takes a value on insert, so the
+                // artifact not carrying one is exactly right.
+                if (! $column->nullable && $column->default === null && ! $column->autoIncrement && ! $column->generated && ! in_array($column->name, $carried, true)) {
                     $required[] = $column->name;
                 }
             }

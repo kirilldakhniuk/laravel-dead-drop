@@ -141,6 +141,50 @@ it('names the table when the target refuses a row, without echoing the row', fun
     $this->fail('The load was expected to fail.');
 });
 
+/**
+ * A `gen` table on one connection, with the generated column only when an
+ * expression is given — the target's expression is deliberately not the
+ * source's, so a recomputed value can be told apart from a copied one.
+ */
+function generatedTable(string $connection, ?string $expression): void
+{
+    Schema::connection($connection)->create('gen', function ($t) use ($expression) {
+        $t->id();
+        $t->integer('a');
+
+        if ($expression !== null) {
+            $t->integer('b')->storedAs($expression);
+        }
+    });
+}
+
+it('lets the target recompute a generated column instead of inserting it', function () {
+    // The executor exports `table.*`, so the artifact carries the source's
+    // computed value — and every engine refuses to be told what a generated
+    // column is.
+    generatedTable('dd_test', 'a * 2');
+    DB::connection('dd_test')->table('gen')->insert([['id' => 1, 'a' => 10], ['id' => 2, 'a' => 20]]);
+    generatedTable('dd_target', 'a * 3');
+
+    $report = pullFixtureArtifact(dumpFixture('dd_test.gen:1', initFixtureConfig()));
+
+    expect($report->loaded['dd_test.gen'])->toBe(1)
+        ->and(DB::connection('dd_target')->table('gen')->where('id', 1)->value('a'))->toBe(10)
+        // 30, not the 20 the artifact carries: the target computed it.
+        ->and(DB::connection('dd_target')->table('gen')->where('id', 1)->value('b'))->toBe(30);
+});
+
+it('does not require a value for a generated column the artifact does not carry', function () {
+    generatedTable('dd_test', null);
+    DB::connection('dd_test')->table('gen')->insert([['id' => 1, 'a' => 10]]);
+    generatedTable('dd_target', 'a * 3');
+
+    $report = pullFixtureArtifact(dumpFixture('dd_test.gen:1', initFixtureConfig()));
+
+    expect($report->loaded['dd_test.gen'])->toBe(1)
+        ->and(DB::connection('dd_target')->table('gen')->where('id', 1)->value('b'))->toBe(30);
+});
+
 it('refuses a manifest holding one bare table name from two connections', function () {
     $columns = [['name' => 'id', 'type' => 'int']];
     $manifest = new Manifest('20260101-000000-aaaaaa', Manifest::STATUS_COMPLETE, '2026-01-01T00:00:00+00:00', 'dev', 'a.users:1', null, 'php', [], [

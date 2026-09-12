@@ -6,6 +6,7 @@ use DeadDrop\DeadDrop\Schema\ColumnType;
 use DeadDrop\DeadDrop\Schema\Introspector;
 use DeadDrop\DeadDrop\Tests\Fixtures\SchemaBuilder;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 
 beforeEach(fn () => SchemaBuilder::migrate('dd_test'));
 
@@ -38,6 +39,20 @@ it('reads a boolean column as bool and a wider tinyint as an integer', function 
 
     expect($flags->column('active')->type)->toBe(ColumnType::Boolean)
         ->and($flags->column('status')->type)->toBe(ColumnType::Integer);
+});
+
+it('marks a generated column as generated', function () {
+    Schema::connection('dd_test')->create('gen', function ($t) {
+        $t->id();
+        $t->integer('a');
+        $t->integer('b')->storedAs('a * 2');
+    });
+
+    $gen = app(Introspector::class)->inspect('dd_test')->table('gen');
+
+    expect($gen->column('b')->generated)->toBeTrue()
+        ->and($gen->column('a')->generated)->toBeFalse()
+        ->and($gen->column('id')->generated)->toBeFalse();
 });
 
 it('reads the primary key and unique indexes', function () {

@@ -49,6 +49,9 @@ final class Introspector
                     nullable: $col['nullable'],
                     autoIncrement: $col['auto_increment'],
                     default: $col['default'] === null ? null : (string) $col['default'],
+                    // `generation` is the ['type' => 'stored'|'virtual', …]
+                    // description of a computed column, and null for the rest.
+                    generated: ($col['generation'] ?? null) !== null,
                 );
             }
 

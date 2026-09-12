@@ -170,8 +170,7 @@ final class DumpCommand extends Command
      */
     private function config(ConfigSet $config): ConfigSet
     {
-        $option = $this->option('connection');
-        $only = is_array($option) ? array_values(array_map('strval', $option)) : [];
+        $only = array_values(array_map('strval', $this->option('connection')));
 
         if ($only === []) {
             return $config;

@@ -127,8 +127,7 @@ final class CheckCommand extends Command
      */
     private function connections(ConfigLoader $loader, string $directory): array
     {
-        $option = $this->option('connection');
-        $connections = is_array($option) ? array_values(array_map('strval', $option)) : [];
+        $connections = array_values(array_map('strval', $this->option('connection')));
 
         return $connections !== [] ? $connections : array_values($loader->loadAll($directory)->connections());
     }

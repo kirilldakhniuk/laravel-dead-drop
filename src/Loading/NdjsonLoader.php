@@ -6,6 +6,7 @@ namespace DeadDrop\DeadDrop\Loading;
 
 use DeadDrop\DeadDrop\Artifacts\ArtifactReader;
 use DeadDrop\DeadDrop\Artifacts\TableManifest;
+use DeadDrop\DeadDrop\Schema\Table;
 use Illuminate\Database\Connection;
 
 /**
@@ -32,13 +33,21 @@ final class NdjsonLoader implements Loader
         return 'ndjson';
     }
 
-    public function load(TableManifest $table, ArtifactReader $reader, string $artifactId, Connection $target): int
+    public function load(TableManifest $table, ArtifactReader $reader, string $artifactId, Connection $target, Table $schema): int
     {
         $written = 0;
         $chunk = [];
         $size = $this->chunkSize($table);
+        $generated = $this->generatedColumns($schema);
 
         foreach ($reader->rows($artifactId, $table) as $row) {
+            // The executor exports `table.*`, so a generated column's computed
+            // value is in the artifact; the database computes it again on
+            // insert and refuses to be told what it is.
+            foreach ($generated as $column) {
+                unset($row[$column]);
+            }
+
             $chunk[] = $row;
 
             if (count($chunk) === $size) {
@@ -52,6 +61,22 @@ final class NdjsonLoader implements Loader
         }
 
         return $written;
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function generatedColumns(Table $schema): array
+    {
+        $generated = [];
+
+        foreach ($schema->columns as $column) {
+            if ($column->generated) {
+                $generated[] = $column->name;
+            }
+        }
+
+        return $generated;
     }
 
     private function chunkSize(TableManifest $table): int

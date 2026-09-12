@@ -5,6 +5,8 @@ declare(strict_types=1);
 use DeadDrop\DeadDrop\Drivers\DriverFactory;
 use DeadDrop\DeadDrop\Drivers\SqliteDriver;
 use DeadDrop\DeadDrop\Schema\ColumnType;
+use DeadDrop\DeadDrop\Tests\Fixtures\SchemaBuilder;
+use Illuminate\Database\QueryException;
 use Illuminate\Support\Facades\DB;
 
 it('resolves a driver from the connection', function () {
@@ -75,4 +77,18 @@ it('normalises native types', function () {
         ->and($driver->normaliseType('numeric'))->toBe(ColumnType::Decimal)
         ->and($driver->normaliseType('json'))->toBe(ColumnType::Json)
         ->and($driver->normaliseType('tinyint'))->toBe(ColumnType::Boolean);
+});
+
+it('toggles foreign key checks', function () {
+    SchemaBuilder::migrate('dd_test');
+    $driver = new SqliteDriver;
+    $connection = DB::connection('dd_test');
+
+    $driver->disableForeignKeyChecks($connection);
+    $connection->table('orders')->insert(['id' => 500, 'company_id' => 999, 'user_id' => 1, 'customer_id' => null, 'total' => 1, 'created_at' => null]);
+    expect($connection->table('orders')->where('id', 500)->exists())->toBeTrue();
+
+    $driver->enableForeignKeyChecks($connection);
+    expect(fn () => $connection->table('orders')->insert(['id' => 501, 'company_id' => 999, 'user_id' => 1, 'customer_id' => null, 'total' => 1, 'created_at' => null]))
+        ->toThrow(QueryException::class);
 });

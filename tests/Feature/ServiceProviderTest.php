@@ -16,3 +16,11 @@ it('defaults to a reserved email domain', function () {
 it('defines the in-memory test connection as the default', function () {
     expect(config('database.default'))->toBe('dd_test');
 });
+
+it('defaults the executor to php', function () {
+    expect(config('dead-drop.executor'))->toBe('php');
+});
+
+it('defines the in-memory target connection', function () {
+    expect(config('database.connections.dd_target.driver'))->toBe('sqlite');
+});

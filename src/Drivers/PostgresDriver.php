@@ -82,6 +82,16 @@ final class PostgresDriver implements DatabaseDriver
         $connection->statement("DROP TABLE IF EXISTS pg_temp.{$this->quote($table)}");
     }
 
+    public function disableForeignKeyChecks(Connection $connection): void
+    {
+        $connection->statement('SET session_replication_role = replica');
+    }
+
+    public function enableForeignKeyChecks(Connection $connection): void
+    {
+        $connection->statement('SET session_replication_role = DEFAULT');
+    }
+
     public function quote(string $identifier): string
     {
         return '"'.str_replace('"', '""', $identifier).'"';

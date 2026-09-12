@@ -81,6 +81,16 @@ final class MySqlDriver implements DatabaseDriver
         $connection->statement("DROP TEMPORARY TABLE IF EXISTS {$this->quote($table)}");
     }
 
+    public function disableForeignKeyChecks(Connection $connection): void
+    {
+        $connection->statement('SET FOREIGN_KEY_CHECKS = 0');
+    }
+
+    public function enableForeignKeyChecks(Connection $connection): void
+    {
+        $connection->statement('SET FOREIGN_KEY_CHECKS = 1');
+    }
+
     public function quote(string $identifier): string
     {
         return '`'.str_replace('`', '``', $identifier).'`';

@@ -37,5 +37,11 @@ interface DatabaseDriver
 
     public function dropKeyTable(Connection $connection, string $name): void;
 
+    /** Turn off referential-integrity enforcement for this session (loading inserts parents and children in plan order under one transaction per table). */
+    public function disableForeignKeyChecks(Connection $connection): void;
+
+    /** Restore referential-integrity enforcement for this session. */
+    public function enableForeignKeyChecks(Connection $connection): void;
+
     public function quote(string $identifier): string;
 }

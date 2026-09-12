@@ -75,6 +75,16 @@ final class SqliteDriver implements DatabaseDriver
         $connection->statement("DROP TABLE IF EXISTS temp.{$this->quote($table)}");
     }
 
+    public function disableForeignKeyChecks(Connection $connection): void
+    {
+        $connection->statement('PRAGMA foreign_keys = OFF');
+    }
+
+    public function enableForeignKeyChecks(Connection $connection): void
+    {
+        $connection->statement('PRAGMA foreign_keys = ON');
+    }
+
     public function quote(string $identifier): string
     {
         return '"'.str_replace('"', '""', $identifier).'"';

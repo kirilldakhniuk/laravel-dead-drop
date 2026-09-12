@@ -36,6 +36,7 @@ final class TableClassifier
         'password_reset_tokens',
         'password_resets',
         'personal_access_tokens',
+        'spatial_ref_sys',
     ];
 
     /**

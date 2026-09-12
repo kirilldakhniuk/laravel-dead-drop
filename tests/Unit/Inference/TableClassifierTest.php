@@ -61,3 +61,12 @@ it('does not classify a table with an unknown row estimate as lookup', function 
 
     expect(classifyFixtureTable('regions'))->toBe(TableClass::Data);
 });
+
+it('skips the PostGIS spatial_ref_sys table', function () {
+    Schema::connection('dd_test')->create('spatial_ref_sys', function ($t) {
+        $t->integer('srid')->primary();
+        $t->string('auth_name')->nullable();
+    });
+
+    expect(classifyFixtureTable('spatial_ref_sys'))->toBe(TableClass::Skip);
+});

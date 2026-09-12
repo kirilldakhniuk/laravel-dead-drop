@@ -12,6 +12,9 @@ return [
     // Directories (relative to base_path()) scanned for Eloquent models during inference.
     'model_paths' => ['app/Models'],
 
+    // Which executor moves rows during dead-drop:dump ('php' ships with the package; register others with ExecutorManager::extend()).
+    'executor' => env('DEAD_DROP_EXECUTOR', 'php'),
+
     'redaction' => [
         'salt' => env('DEAD_DROP_REDACTION_SALT'),
         'email_domain' => env('DEAD_DROP_EMAIL_DOMAIN', 'example.test'),

@@ -25,9 +25,9 @@ final class TransformerFactory
             'hash' => new HashTransformer($context->salt, $column->type === ColumnType::String ? $this->declaredLength($column) : null, $this->isEmailColumn($column) ? $context->emailDomain : null),
             'mask' => new MaskTransformer,
             'null' => new NullTransformer,
-            'scramble' => $column->type === ColumnType::DateTime
+            'scramble' => $this->isDateColumn($column)
                 ? new ScrambleTransformer($context->salt, $primaryKey)
-                : throw new InvalidArgumentException("'scramble' requires a date or datetime column; [{$column->name}] is {$column->type->value}."),
+                : throw new InvalidArgumentException("'scramble' requires a date or datetime column; [{$column->name}] is {$column->nativeType}."),
             'bcrypt' => new BcryptTransformer($context, (string) $argument),
             'fixed' => new FixedTransformer((string) $argument),
             'keep' => new KeepTransformer,
@@ -35,7 +35,12 @@ final class TransformerFactory
         };
     }
 
-    private function declaredLength(Column $column): ?int
+    /**
+     * The length declared in the native type (`varchar(32)` → 32), when the
+     * database states one. `RedactionRules` asks the same question, so this
+     * is the one answer both use.
+     */
+    public function declaredLength(Column $column): ?int
     {
         return preg_match('/\((\d+)/', $column->nativeType, $matches) === 1 ? (int) $matches[1] : null;
     }
@@ -45,10 +50,26 @@ final class TransformerFactory
      * `Inference\SensitiveColumnDetector::PATTERNS` (that constant is
      * private, so it is duplicated here rather than shared).
      */
-    private function isEmailColumn(Column $column): bool
+    public function isEmailColumn(Column $column): bool
     {
         $lower = strtolower($column->name);
 
         return $lower === 'email' || $lower === 'email_address' || str_ends_with($lower, '_email');
+    }
+
+    /**
+     * Whether `scramble` can shift this column: a date, datetime or
+     * timestamp. `ColumnType::DateTime` also covers `time` and `year`, which
+     * carry no date to move.
+     */
+    public function isDateColumn(Column $column): bool
+    {
+        if ($column->type !== ColumnType::DateTime) {
+            return false;
+        }
+
+        $native = strtolower(trim($column->nativeType));
+
+        return str_starts_with($native, 'date') || str_starts_with($native, 'timestamp');
     }
 }

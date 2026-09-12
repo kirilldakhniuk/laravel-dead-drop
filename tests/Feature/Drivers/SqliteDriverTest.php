@@ -75,8 +75,24 @@ it('normalises native types', function () {
         ->and($driver->normaliseType('varchar'))->toBe(ColumnType::String)
         ->and($driver->normaliseType('datetime'))->toBe(ColumnType::DateTime)
         ->and($driver->normaliseType('numeric'))->toBe(ColumnType::Decimal)
-        ->and($driver->normaliseType('json'))->toBe(ColumnType::Json)
-        ->and($driver->normaliseType('tinyint'))->toBe(ColumnType::Boolean);
+        ->and($driver->normaliseType('json'))->toBe(ColumnType::Json);
+});
+
+it('treats only tinyint(1) as a boolean', function () {
+    $driver = new SqliteDriver;
+
+    expect($driver->normaliseType('tinyint(1)'))->toBe(ColumnType::Boolean)
+        ->and($driver->normaliseType('TINYINT(1) unsigned'))->toBe(ColumnType::Boolean)
+        ->and($driver->normaliseType('tinyint'))->toBe(ColumnType::Integer)
+        ->and($driver->normaliseType('tinyint(4)'))->toBe(ColumnType::Integer);
+});
+
+it('normalises a spelled out postgres type', function () {
+    $driver = new SqliteDriver;
+
+    expect($driver->normaliseType('timestamp(0) without time zone'))->toBe(ColumnType::DateTime)
+        ->and($driver->normaliseType('character varying(255)'))->toBe(ColumnType::String)
+        ->and($driver->normaliseType('double precision'))->toBe(ColumnType::Decimal);
 });
 
 it('toggles foreign key checks', function () {

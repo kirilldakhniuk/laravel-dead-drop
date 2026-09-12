@@ -10,7 +10,7 @@
     <a href="https://packagist.org/packages/kirilldakhniuk/dead-drop"><img src="https://img.shields.io/packagist/dt/kirilldakhniuk/dead-drop.svg?style=flat-square" alt="Total Downloads"></a>
 </p>
 
-Dead Drop is a Laravel package that discovers your database schema, builds a reviewed per-connection config describing how each table should be classified, scoped and redacted, detects drift between that config and the live schema, dumps a redacted, referentially-complete slice of a root row — everything it points to or that points at it — to a portable artifact, and pulls that artifact into a local or staging database. Native executors (`mysqldump`, `mysqlsh`, `psql`), composite primary keys, `--full` (whole-database) dumps and schema creation on the target are not implemented yet. Requires PHP ^8.3 and Laravel 12 or 13.
+Dead Drop is a Laravel package that discovers your database schema, builds a reviewed per-connection config describing how each table should be classified, scoped and redacted, detects drift between that config and the live schema, dumps a redacted, referentially-complete slice of a root row — everything it points to or that points at it — to a portable artifact, and pulls that artifact into a local or staging database. Native executors (`mysqldump`, `mysqlsh`, `psql`), composite primary keys, `--full` (whole-database) dumps and schema creation on the target are not implemented yet. Requires PHP ^8.3, the `zlib` extension (artifacts are gzipped) and Laravel 12 or 13.
 
 ## Installation
 
@@ -150,7 +150,9 @@ Every table entry can hold these keys, and nothing else:
 - `scramble` — for `date_of_birth`, `dob`, `birth_date`.
 - `bcrypt:secret` — a deterministic placeholder for `password`/`password_hash`: the bcrypt hash of the literal string `secret`, computed at extraction time, so re-running `init` never churns the file.
 - `fixed:redacted` — for a string-typed column with a `stripe_` prefix or a `_customer_id` suffix (e.g. `stripe_id`).
-- `review` — not a redaction transformer at all, but a placeholder `dead-drop:init` writes for a JSON column of unknown shape that it cannot classify automatically. `dead-drop:check` treats a leftover `review` — or any sensitive column with no `redact` entry at all — as undecided and fails until a human replaces it with a real decision.
+- `review` — not a redaction transformer at all, but a placeholder `dead-drop:init` writes for a JSON column of unknown shape that it cannot classify automatically. `dead-drop:check` treats a leftover `review` — or a JSON column or sensitive column with no `redact` entry at all — as undecided and fails until a human replaces it with a real decision.
+
+A suggestion is a guess from a column's name, and the rules below judge it against the column's type, nullability and indexes — `null` on a `NOT NULL` `*_key`, `hash` on a non-string `ssn`. `dead-drop:init` runs those rules over what it discovered and writes `review` instead of any suggestion they reject, so the generated file is never one `dead-drop:check` and `dead-drop:dump` would both refuse.
 
 ### Re-running `init`
 
@@ -172,8 +174,9 @@ It exits `0` when every checked connection is clean, and `1` when any checked co
 - a new table present in the schema but missing from the config,
 - a table in the config that has vanished from the schema (and is not already marked `removed`),
 - a new or removed column on a table still under review,
-- a sensitive column the config has no `redact` entry for, or
-- a `redact` entry still set to the `review` placeholder,
+- a sensitive column, or a JSON column, the config has no `redact` entry for,
+- a `redact` entry still set to the `review` placeholder, or
+- a `redact` entry the extraction gate would refuse, printed under the connection's `Invalid redaction entries:` heading as one `  - {table}.{column}: {reason}` line each (the same rules `dead-drop:dump` runs, so CI cannot go green on a config a dump will not start from),
 
 or when a named connection has no config file at all (it tells you to run `dead-drop:init --connection=<name>`). Running it with no `--connection=` against a directory holding no config at all is a failure too, not a pass — a CI job that never ran `init` should not go green.
 
@@ -228,7 +231,7 @@ A `QueryException` during extraction — a hand-written `exclude` fragment, or a
 
 | `redact` value | result |
 |---|---|
-| `hash` | lowercase hex SHA-256 of `salt . value`, truncated to the column's declared length when known; on a column whose name matches `email`, `email_address` or `*_email`, the result is `{first 16 hex chars}@{email_domain}` instead |
+| `hash` | lowercase hex SHA-256 of `salt . value`, truncated to the column's declared length when known; on a column whose name matches `email`, `email_address` or `*_email`, the result is `{first 16 hex chars}@{email_domain}` instead, with the hex shortened (never below 8 characters) when the declared length cannot hold the full form |
 | `mask` | the last 4 characters kept, every character before them replaced with `*`; a value of 4 characters or fewer becomes `****` |
 | `null` | `null` |
 | `scramble` | the date or datetime value shifted by a deterministic offset in `[-180, +180]` days derived from `salt` and the row's primary key |
@@ -239,14 +242,16 @@ A `QueryException` during extraction — a hand-written `exclude` fragment, or a
 
 Rules enforced before any row moves — the extraction gate — cover:
 
-1. schema drift on any connection in the plan (the same checks `dead-drop:check` makes: new/removed tables or columns, undecided sensitive columns, a leftover `review` placeholder);
+1. schema drift on any connection in the plan (the same checks `dead-drop:check` makes: new/removed tables or columns, undecided sensitive or JSON columns, a leftover `review` placeholder);
 2. `redaction.salt` missing or shorter than 16 characters (`redaction.salt must be set to at least 16 characters (DEAD_DROP_REDACTION_SALT)`);
-3. invalid redaction placements — `null` on a `NOT NULL` column, `scramble` on anything but a date/datetime column, `hash`/`mask` on anything but a string column, any entry on a primary key or a reference column, or an unknown transformer name — each reported against the column it names;
+3. invalid redaction placements — `null` on a `NOT NULL` column, `scramble` on anything but a `date`, `datetime` or `timestamp` column (a `time` or `year` column carries no date to shift), `hash`/`mask` on anything but a string column, a truncated `hash` on a unique-indexed column whose declared length cannot keep it distinct (at least 32 characters, or enough to hold the full email form on an email-shaped column), a `hash` on an email-shaped column too narrow to hold `{8 hex}@{email_domain}`, any entry on a primary key or a reference column, or an unknown transformer name — each reported against the column it names;
 4. root ids that do not exist in the root table.
 
 There is no bypass flag: every category runs and every violation is collected, so `dead-drop:dump` prints everything wrong in one pass. Primary key columns and reference (foreign-key-like) columns can never carry a `redact` entry at all.
 
 Non-UTF-8 text in a string column is substituted with the Unicode replacement character (U+FFFD) when the row is JSON-encoded into the artifact, so a dump of latin1-style text is lossy. Binary columns are wrapped as `{"__base64": "<payload>"}` and round-trip exactly.
+
+Column types are read from the full native type, so only MySQL's `tinyint(1)` is treated as a boolean — a `tinyint(4)` is an integer and a status of `5` stays `5` through the artifact and the load. A value that is not a recognised boolean on a column typed as one is passed through unchanged rather than cast.
 
 `exclude` and `window` only ever narrow what a *descending* pass collects — they never filter a finished dump or an ascended row (see the config file section above); use `skip` on the table, or a `redact` entry on the column, when data must be absent absolutely.
 
@@ -259,7 +264,7 @@ A dump is written to `{disk}:{path}/{id}/`, where `{id}` is `Ymd-His-<6 random l
 - `version` — the manifest format version (currently `1`).
 - `id`, `status` (`writing` or `complete`), `created_at`, `package_version`, `root`, `since`, `executor`.
 - `connections` — every connection in the dump, keyed by name, each with its `driver`.
-- `tables` — in plan-step (and load) order, each with `connection`, `table`, `file`, `format`, `rows`, `bytes`, `primary_key`, `columns` (`name` and `ColumnType` backing value, in schema order) and `redacted` (the columns that were transformed).
+- `tables` — in plan-step (and load) order, each with `connection`, `table`, `file`, `format`, `rows`, `bytes`, `primary_key`, `columns` (`name` and `ColumnType` backing value, in schema order) and `redacted` (the columns whose values were changed — a `keep` entry runs as a passthrough and is deliberately not listed).
 - `unresolved` — the same unresolved-reference entries the plan prints (`connection`, `table`, `column`, `reason`).
 
 List what is on a disk with `dead-drop:dumps`:
@@ -288,11 +293,22 @@ php artisan dead-drop:pull [id] --connection=target
 
 It refuses to run unless `app()->environment()` matches one of `pull.allow_environments` (default `['local', 'staging']`) — everywhere else it prints `dead-drop:pull refuses to run in the [{environment}] environment; allowed: {comma-separated list, or "none"}` and exits 1. This is checked before the disk is even touched, because a pull is a destructive write and the one place it must never happen is the database the artifact came from.
 
-It also refuses when no complete artifact is found (`No complete artifact found on {disk}:{path}.`), when a named artifact is not `status: "complete"` (`Artifact [{id}] is incomplete (status: {status}) and cannot be loaded.`), when the target connection is not one of `database.connections` (`Unknown database connection [{connection}].`), when a target table is missing a column the artifact carries (`Target table [{table}] is missing columns: {list}`), and when the artifact holds the same bare table name from two different connections (`Artifact holds table [{table}] from more than one connection; a single target cannot hold both.`) — a single target database cannot hold both, so the pull is refused intact rather than picking one. A table the artifact names but the target does not have is skipped and named in the summary, not refused.
+It also refuses when no complete artifact is found (`No complete artifact found on {disk}:{path}.`), when a named artifact is not `status: "complete"` (`Artifact [{id}] is incomplete (status: {status}) and cannot be loaded.`), when its manifest cannot be parsed (`Artifact [{id}] has a corrupt manifest.`), and when the target connection is not one of `database.connections` (`Unknown database connection [{connection}].`).
 
-Unless `--force` (or running non-interactively), it asks for confirmation before writing anything: `Replace {n} tables on connection [{target}] with artifact [{id}]?`. Once confirmed, it replaces one table at a time inside its own transaction: delete every row, insert the artifact's rows, and compare the count against the manifest, rolling that table back on a mismatch. Referential-integrity checks are turned off for the whole run (MySQL `SET FOREIGN_KEY_CHECKS = 0`, Postgres `SET session_replication_role = replica` — which needs superuser or an equivalent role on many managed hosts, e.g. Amazon RDS's `rds_superuser` — SQLite `PRAGMA foreign_keys = OFF`) because a slice arrives in plan order, not an order any one database would accept row by row, and are always restored afterward. Tables the artifact does not name are never touched, so this is a targeted replace, not a restore.
+It refuses the target itself when the artifact was dumped from it — `Refusing to load into {target}: it is a source connection of this artifact.`, checked against the manifest's `connections` and with no override — because replacing a table with the slice of itself the dump carried is exactly the loss the environment guard exists to prevent.
 
-Once every table is replaced, the summary (`Loaded {rows} rows into {n} tables from artifact [{id}].`, plus one line per skipped table) is printed *before* `pull.after` runs, so a hook failure never hides that the load already happened. Each `pull.after` entry (default `[]`) is either a class-string — resolved from the container and invoked with the run's `PullReport` — or an Artisan command name run with `Artisan::call()`; the first one that throws, exits non-zero, or fails to resolve stops the rest and fails the command with the artifact already loaded.
+The shape of the target is checked against the whole manifest before a single row moves, so a target that cannot hold the slice is refused intact rather than left half replaced:
+
+- `Artifact holds table {table} from more than one connection; a single target cannot hold both.` — a single target database cannot hold both, so the operator has to split the pull rather than silently lose a slice;
+- `No loader for artifact format {format}.` — an artifact written by a newer version in a format this installation cannot read;
+- `Target table {table} is missing columns: {list}` — a column the artifact carries that the target has no place for;
+- `Target table {table} requires columns the artifact does not carry: {list}` — a `NOT NULL` target column with no default and no auto-increment that the artifact has no value for, which would fail on every insert.
+
+A table the artifact names but the target does not have is skipped and named in the summary, not refused.
+
+Unless `--force` (or running non-interactively), it asks for confirmation before writing anything: `Replace {n} tables on connection [{target}] with artifact [{id}]?`. Once confirmed, it replaces one table at a time inside its own transaction: delete every row, insert the artifact's rows, and compare the count against the manifest, rolling that table back on a mismatch. A database error during a load is reported as `Loading {connection}.{table} failed: {engine message}`, because the engine's own message names a column and a constraint but never which table was being written. Referential-integrity checks are turned off for the whole run (MySQL `SET FOREIGN_KEY_CHECKS = 0`, Postgres `SET session_replication_role = replica` — which needs superuser or an equivalent role on many managed hosts, e.g. Amazon RDS's `rds_superuser` — SQLite `PRAGMA foreign_keys = OFF`) because a slice arrives in plan order, not an order any one database would accept row by row, and are always restored afterward. Tables the artifact does not name are never touched, so this is a targeted replace, not a restore.
+
+Once every table is replaced, the summary (`Loaded {rows} rows into {n} tables from artifact [{id}].`, plus one line per skipped table) is printed *before* `pull.after` runs, so a hook failure never hides that the load already happened. Each `pull.after` entry (default `[]`) is either a class-string — resolved from the container and invoked with the run's `PullReport` — or an Artisan command name run with `Artisan::call()`; the first one that throws, exits non-zero, or fails to resolve stops the rest and fails the command with the artifact already loaded. An entry that is not a non-empty string is skipped with `Skipping non-string after hook entry.` rather than ignored silently.
 
 ### Executors
 
@@ -310,6 +326,8 @@ public function boot(ExecutorManager $executors): void
 ```
 
 then select it with `DEAD_DROP_EXECUTOR=mysqlsh`. Native executors (`mysqldump`, `mysqlsh`, `psql`) are not implemented in this phase — the `binaries` config keys exist for them but currently do nothing.
+
+An executor that writes something other than gzipped NDJSON puts its own files into the artifact directory with `ArtifactWriter::put($file, $streamOrString)` and names its format in the `TableArtifact` it returns. `dead-drop:pull` reads that `format` back and resolves it through `LoaderRegistry`, handing the matching `Loader` the reader, the artifact id and the target connection (`load(TableManifest $table, ArtifactReader $reader, string $artifactId, Connection $target): int`) — a loader reads its own file rather than being handed rows, so the two halves of a format stay together. The bundled `ndjson` loader is the only one registered.
 
 ## Changelog
 

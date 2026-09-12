@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace DeadDrop\DeadDrop\Config;
 
 use DeadDrop\DeadDrop\Inference\SensitiveColumnDetector;
+use DeadDrop\DeadDrop\Schema\ColumnType;
 use DeadDrop\DeadDrop\Schema\DatabaseSchema;
 use DeadDrop\DeadDrop\Schema\Table;
 
@@ -127,7 +128,18 @@ final class DriftDetector
                     $columns[] = "{$tableName}.{$column}";
                 }
             }
+
+            // A JSON blob of unknown shape is a decision `init` writes as
+            // `review`; deleting that line is not the same as making it, so
+            // the column is undecided again rather than silently allowed.
+            foreach ($table->columns as $column) {
+                if ($column->type === ColumnType::Json && ! array_key_exists($column->name, $tableConfig->redact)) {
+                    $columns[] = "{$tableName}.{$column->name}";
+                }
+            }
         }
+
+        $columns = array_values(array_unique($columns));
 
         sort($columns);
 

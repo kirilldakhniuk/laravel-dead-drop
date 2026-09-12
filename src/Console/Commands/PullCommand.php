@@ -6,6 +6,7 @@ namespace DeadDrop\DeadDrop\Console\Commands;
 
 use DeadDrop\DeadDrop\Artifacts\ArtifactReader;
 use DeadDrop\DeadDrop\Artifacts\Manifest;
+use DeadDrop\DeadDrop\Console\Commands\Concerns\ResolvesArtifactLocation;
 use DeadDrop\DeadDrop\Loading\PullReport;
 use DeadDrop\DeadDrop\Loading\PullRunner;
 use Illuminate\Console\Command;
@@ -28,6 +29,8 @@ use function Laravel\Prompts\confirm;
  */
 final class PullCommand extends Command
 {
+    use ResolvesArtifactLocation;
+
     /** @var string */
     protected $signature = 'dead-drop:pull {id? : Artifact id (defaults to the newest complete one)} {--connection= : Target connection (defaults to the default connection)} {--disk= : Disk holding artifacts} {--path= : Path on the disk} {--force : Skip the confirmation}';
 
@@ -49,8 +52,8 @@ final class PullCommand extends Command
             return self::FAILURE;
         }
 
-        $disk = $this->disk();
-        $path = $this->path();
+        $disk = $this->artifactDisk();
+        $path = $this->artifactPath();
         $reader = new ArtifactReader(Storage::disk($disk), $path);
 
         try {
@@ -69,6 +72,16 @@ final class PullCommand extends Command
 
         if (! in_array($target, array_keys((array) config('database.connections')), true)) {
             $this->error("Unknown database connection [{$target}].");
+
+            return self::FAILURE;
+        }
+
+        // Loading a slice back into the database it was taken from would
+        // replace whole tables with the part of themselves the dump carried,
+        // and no environment guard can catch that — the source connection is
+        // named in the artifact, so the refusal reads it from there.
+        if (array_key_exists($target, $manifest->connections)) {
+            $this->error("Refusing to load into [{$target}]: it is a source connection of this artifact.");
 
             return self::FAILURE;
         }
@@ -165,6 +178,8 @@ final class PullCommand extends Command
     {
         foreach ((array) config('dead-drop.pull.after') as $entry) {
             if (! is_string($entry) || $entry === '') {
+                $this->warn('Skipping non-string after hook entry.');
+
                 continue;
             }
 
@@ -219,19 +234,5 @@ final class PullCommand extends Command
         $connection = $this->option('connection');
 
         return is_string($connection) && $connection !== '' ? $connection : (string) config('database.default');
-    }
-
-    private function disk(): string
-    {
-        $disk = $this->option('disk');
-
-        return is_string($disk) && $disk !== '' ? $disk : (string) config('dead-drop.disk');
-    }
-
-    private function path(): string
-    {
-        $path = $this->option('path');
-
-        return is_string($path) && $path !== '' ? $path : (string) config('dead-drop.path');
     }
 }

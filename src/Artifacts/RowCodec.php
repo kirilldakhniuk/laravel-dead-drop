@@ -93,18 +93,34 @@ final class RowCodec
      * strings `t`/`f` rather than native booleans, and `(bool) 'f'` is
      * `true` — so string values get their own truth table instead of a
      * plain cast.
+     *
+     * Anything else is passed through untouched: a column this package read
+     * as a boolean but the source stored a 5 in (a MySQL `tinyint` narrowed
+     * by an older introspection) must arrive as 5, not as `true`.
      */
-    private function decodeBoolean(mixed $value): bool
+    private function decodeBoolean(mixed $value): mixed
     {
-        if (is_string($value)) {
-            return match (strtolower($value)) {
-                'f', 'false', '0', '' => false,
-                't', 'true', '1' => true,
-                default => (bool) $value,
+        if (is_bool($value)) {
+            return $value;
+        }
+
+        if (is_int($value)) {
+            return match ($value) {
+                0 => false,
+                1 => true,
+                default => $value,
             };
         }
 
-        return (bool) $value;
+        if (is_string($value)) {
+            return match (strtolower($value)) {
+                'f', 'false', '0' => false,
+                't', 'true', '1' => true,
+                default => $value,
+            };
+        }
+
+        return $value;
     }
 
     /**

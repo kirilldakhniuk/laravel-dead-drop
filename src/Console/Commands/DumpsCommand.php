@@ -6,6 +6,7 @@ namespace DeadDrop\DeadDrop\Console\Commands;
 
 use DeadDrop\DeadDrop\Artifacts\ArtifactReader;
 use DeadDrop\DeadDrop\Console\Commands\Concerns\FormatsBytes;
+use DeadDrop\DeadDrop\Console\Commands\Concerns\ResolvesArtifactLocation;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\Storage;
 use Throwable;
@@ -17,6 +18,7 @@ use Throwable;
 final class DumpsCommand extends Command
 {
     use FormatsBytes;
+    use ResolvesArtifactLocation;
 
     /** @var string */
     protected $signature = 'dead-drop:dumps {--disk= : Disk holding artifacts (defaults to dead-drop.disk)} {--path= : Path on the disk (defaults to dead-drop.path)}';
@@ -26,8 +28,8 @@ final class DumpsCommand extends Command
 
     public function handle(): int
     {
-        $disk = $this->disk();
-        $path = $this->path();
+        $disk = $this->artifactDisk();
+        $path = $this->artifactPath();
         $reader = new ArtifactReader(Storage::disk($disk), $path);
         $ids = $reader->ids();
 
@@ -64,19 +66,5 @@ final class DumpsCommand extends Command
         $this->table(['Id', 'Created', 'Root', 'Status', 'Tables', 'Rows', 'Size'], $rows);
 
         return self::SUCCESS;
-    }
-
-    private function disk(): string
-    {
-        $disk = $this->option('disk');
-
-        return is_string($disk) && $disk !== '' ? $disk : (string) config('dead-drop.disk');
-    }
-
-    private function path(): string
-    {
-        $path = $this->option('path');
-
-        return is_string($path) && $path !== '' ? $path : (string) config('dead-drop.path');
     }
 }

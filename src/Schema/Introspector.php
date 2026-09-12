@@ -42,7 +42,9 @@ final class Introspector
             foreach ($builder->getColumns($name) as $col) {
                 $columns[$col['name']] = new Column(
                     name: $col['name'],
-                    type: $driver->normaliseType($col['type_name']),
+                    // The full native type, not `type_name`: `tinyint(1)` is a
+                    // boolean and `tinyint(4)` is not, and only `type` says which.
+                    type: $driver->normaliseType($col['type']),
                     nativeType: $col['type'],
                     nullable: $col['nullable'],
                     autoIncrement: $col['auto_increment'],

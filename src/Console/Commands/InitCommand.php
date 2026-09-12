@@ -17,6 +17,7 @@ use DeadDrop\DeadDrop\Inference\MorphPairDetector;
 use DeadDrop\DeadDrop\Inference\SensitiveColumnDetector;
 use DeadDrop\DeadDrop\Inference\Sources\EloquentSource;
 use DeadDrop\DeadDrop\Inference\TableClassifier;
+use DeadDrop\DeadDrop\Redaction\RedactionRules;
 use DeadDrop\DeadDrop\Schema\ColumnType;
 use DeadDrop\DeadDrop\Schema\DatabaseSchema;
 use DeadDrop\DeadDrop\Schema\Introspector;
@@ -64,6 +65,7 @@ final class InitCommand extends Command
         ConfigMerger $merger,
         ConfigRenderer $renderer,
         EloquentSource $eloquentSource,
+        RedactionRules $rules,
     ): int {
         $connectionOption = $this->option('connection');
         $connections = is_array($connectionOption) ? array_values(array_map('strval', $connectionOption)) : [];
@@ -111,7 +113,7 @@ final class InitCommand extends Command
             $schema = $this->describe($introspector, $connection);
             $edges = $edgeInferrer->infer($schema);
 
-            $discovered = $this->discover($schema, $edges, $classifier, $sensitive, $morphs, $skip);
+            $discovered = $this->discover($schema, $edges, $classifier, $sensitive, $morphs, $rules, $skip);
 
             $file = "{$directory}/{$connection}.php";
             $existing = $loader->load($connection, $directory);
@@ -242,12 +244,13 @@ final class InitCommand extends Command
         TableClassifier $classifier,
         SensitiveColumnDetector $sensitive,
         MorphPairDetector $morphs,
+        RedactionRules $rules,
         array $skip,
     ): ConnectionConfig {
         $tables = [];
 
         foreach ($schema->tables as $table) {
-            $tables[$table->name] = $this->discoverTable($schema->connection, $table, $edges, $classifier, $sensitive, $morphs, $skip);
+            $tables[$table->name] = $this->discoverTable($schema->connection, $table, $edges, $classifier, $sensitive, $morphs, $rules, $skip);
         }
 
         return new ConnectionConfig($schema->connection, $tables);
@@ -264,6 +267,7 @@ final class InitCommand extends Command
         TableClassifier $classifier,
         SensitiveColumnDetector $sensitive,
         MorphPairDetector $morphs,
+        RedactionRules $rules,
         array $skip,
     ): TableConfig {
         $class = $classifier->classify($table, $edges);
@@ -303,7 +307,7 @@ final class InitCommand extends Command
             }
         }
 
-        return new TableConfig(
+        $config = new TableConfig(
             name: $table->name,
             class: $class,
             columns: array_values($table->columnNames()),
@@ -312,6 +316,40 @@ final class InitCommand extends Command
             window: $table->column('created_at') !== null ? 'created_at' : null,
             exclude: null,
             morph: $morphs->detect($table),
+        );
+
+        return $this->reviewable($config, $table, $rules);
+    }
+
+    /**
+     * A suggestion is a guess from a column's name, and the gate judges it
+     * against the column's type, nullability and indexes — `null` on a NOT
+     * NULL `*_key`, `hash` on a non-string `ssn`. Rather than write a map
+     * `dead-drop:check` and `dead-drop:dump` will both refuse, every rejected
+     * suggestion is handed back to the human as `review`.
+     */
+    private function reviewable(TableConfig $config, Table $table, RedactionRules $rules): TableConfig
+    {
+        $redact = $config->redact;
+
+        foreach (array_keys($rules->violationsByColumn($config, $table)) as $column) {
+            $redact[$column] = 'review';
+        }
+
+        if ($redact === $config->redact) {
+            return $config;
+        }
+
+        return new TableConfig(
+            name: $config->name,
+            class: $config->class,
+            columns: $config->columns,
+            references: $config->references,
+            redact: $redact,
+            window: $config->window,
+            exclude: $config->exclude,
+            morph: $config->morph,
+            removed: $config->removed,
         );
     }
 

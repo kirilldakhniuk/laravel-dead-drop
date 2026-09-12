@@ -12,6 +12,7 @@ use DeadDrop\DeadDrop\Drivers\DriverFactory;
 use DeadDrop\DeadDrop\Schema\DatabaseSchema;
 use DeadDrop\DeadDrop\Schema\Introspector;
 use Illuminate\Database\Connection;
+use Illuminate\Database\QueryException;
 use Illuminate\Support\Facades\DB;
 use InvalidArgumentException;
 use RuntimeException;
@@ -37,7 +38,7 @@ final class PullRunner
     /**
      * @param  Closure(string, int): void|null  $progress  called with the table key and rows written, after each table
      *
-     * @throws RuntimeException when the target is missing a column the artifact carries, or a table loads a different number of rows than the manifest promises
+     * @throws RuntimeException when the target cannot hold the slice, or a table loads a different number of rows than the manifest promises
      * @throws InvalidArgumentException when the manifest names a format this installation has no loader for
      */
     public function run(Manifest $manifest, ArtifactReader $reader, string $targetConnection, ?Closure $progress = null): PullReport
@@ -84,18 +85,24 @@ final class PullRunner
         $loader = $this->loaders->for($table->format);
         $written = 0;
 
-        $db->transaction(function () use ($table, $manifest, $reader, $db, $loader, &$written): void {
-            $db->table($table->table)->delete();
+        try {
+            $db->transaction(function () use ($table, $manifest, $reader, $db, $loader, &$written): void {
+                $db->table($table->table)->delete();
 
-            $written = $loader->load($table, $reader->rows($manifest->id, $table), $db);
+                $written = $loader->load($table, $reader, $manifest->id, $db);
 
-            // A short table means the artifact file and its manifest entry
-            // disagree, and a slice that is quietly incomplete is worse than
-            // one that is not there, so the table rolls back.
-            if ($written !== $table->rows) {
-                throw new RuntimeException("Row count mismatch for [{$table->key()}]: manifest says {$table->rows}, loaded {$written}");
-            }
-        });
+                // A short table means the artifact file and its manifest entry
+                // disagree, and a slice that is quietly incomplete is worse than
+                // one that is not there, so the table rolls back.
+                if ($written !== $table->rows) {
+                    throw new RuntimeException("Row count mismatch for [{$table->key()}]: manifest says {$table->rows}, loaded {$written}");
+                }
+            });
+        } catch (QueryException $e) {
+            // A pull touches many tables; the engine's message names a column
+            // and a constraint but never which of them was being written.
+            throw new RuntimeException("Loading [{$table->key()}] failed: {$e->getMessage()}", previous: $e);
+        }
 
         return $written;
     }
@@ -114,6 +121,11 @@ final class PullRunner
             }
 
             $seen[$table->table] = $table->connection;
+
+            // An artifact written by a newer version can name a format this
+            // installation cannot read; finding that out half way through
+            // would leave the tables before it already replaced.
+            $this->loaders->for($table->format);
         }
 
         foreach ($manifest->tables as $table) {
@@ -123,15 +135,31 @@ final class PullRunner
                 continue; // absent tables are skipped, not refused
             }
 
-            $missing = array_values(array_diff(
-                array_column($table->columns, 'name'),
-                $target->columnNames(),
-            ));
+            $carried = array_column($table->columns, 'name');
+
+            $missing = array_values(array_diff($carried, $target->columnNames()));
 
             sort($missing);
 
             if ($missing !== []) {
                 throw new RuntimeException("Target table [{$table->table}] is missing columns: ".implode(', ', $missing));
+            }
+
+            $required = [];
+
+            // A target column the artifact has no value for only works when
+            // the database can supply one; otherwise every insert fails, and
+            // it should fail before the table is emptied.
+            foreach ($target->columns as $column) {
+                if (! $column->nullable && $column->default === null && ! $column->autoIncrement && ! in_array($column->name, $carried, true)) {
+                    $required[] = $column->name;
+                }
+            }
+
+            sort($required);
+
+            if ($required !== []) {
+                throw new RuntimeException("Target table [{$table->table}] requires columns the artifact does not carry: ".implode(', ', $required));
             }
         }
     }

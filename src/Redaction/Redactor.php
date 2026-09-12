@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace DeadDrop\DeadDrop\Redaction;
 
 use DeadDrop\DeadDrop\Config\TableConfig;
+use DeadDrop\DeadDrop\Redaction\Transformers\KeepTransformer;
 use DeadDrop\DeadDrop\Schema\Table;
 use InvalidArgumentException;
 
@@ -29,7 +30,7 @@ final class Redactor
     public static function forTable(TableConfig $config, Table $table, RedactionContext $context, ?TransformerFactory $factory = null): self
     {
         $factory ??= new TransformerFactory;
-        $violations = (new RedactionRules($factory))->violations($config, $table);
+        $violations = (new RedactionRules($factory, $context))->violations($config, $table);
 
         if ($violations !== []) {
             throw new InvalidArgumentException("Invalid redaction config for [{$table->name}]: ".implode('; ', $violations));
@@ -71,11 +72,23 @@ final class Redactor
     }
 
     /**
+     * The columns whose values this redactor changes. A `keep` entry records
+     * a human decision that a flagged column is fine as it is, so it is
+     * applied as a passthrough but never reported as redacted — the
+     * manifest's `redacted` list would otherwise overstate what moved.
+     *
      * @return list<string>
      */
     public function columns(): array
     {
-        $columns = array_keys($this->transformers);
+        $columns = [];
+
+        foreach ($this->transformers as $column => $transformer) {
+            if (! $transformer instanceof KeepTransformer) {
+                $columns[] = $column;
+            }
+        }
+
         sort($columns);
 
         return $columns;

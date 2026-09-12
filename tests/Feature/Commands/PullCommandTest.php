@@ -108,6 +108,19 @@ it('skips the prompt with --no-interaction', function () {
     expect(DB::connection('dd_target')->table('orders')->count())->toBe(2);
 });
 
+it('refuses to load back into a source connection of the artifact', function () {
+    dumpFixture('dd_test.companies:1', initFixtureConfig());
+
+    $this->artisan('dead-drop:pull', ['--connection' => 'dd_test', '--disk' => 'local', '--force' => true])
+        ->expectsOutputToContain('Refusing to load into [dd_test]: it is a source connection of this artifact.')
+        ->assertFailed();
+
+    // The slice only ever held company 1, so the untouched rows of company 2
+    // are the proof nothing was replaced.
+    expect(DB::connection('dd_test')->table('orders')->count())->toBe(3)
+        ->and(DB::connection('dd_test')->table('users')->where('id', 10)->value('email'))->toBe('a@acme.test');
+});
+
 it('refuses an unknown target connection', function () {
     dumpFixture('dd_test.companies:1', initFixtureConfig());
 

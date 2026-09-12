@@ -12,7 +12,8 @@ use RuntimeException;
 /**
  * Writes one dump artifact under `{basePath}/{id}/` on a disk: the
  * per-table gzipped NDJSON files and, once every table is written, the
- * manifest that names them.
+ * manifest that names them. An executor that writes another format puts its
+ * own files through `put()` instead of `table()`.
  */
 final class ArtifactWriter
 {
@@ -31,10 +32,27 @@ final class ArtifactWriter
 
     public function writeManifest(Manifest $manifest): void
     {
-        $this->disk->put(
-            $this->path('manifest.json'),
+        $this->put(
+            'manifest.json',
             json_encode($manifest->toArray(), JSON_THROW_ON_ERROR | JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE),
         );
+    }
+
+    /**
+     * Writes one file into this artifact's directory, for an executor that
+     * produces its own format rather than the bundled gzipped NDJSON.
+     *
+     * @param  resource|string  $stream
+     *
+     * @throws RuntimeException when the disk refuses the write
+     */
+    public function put(string $file, mixed $stream): void
+    {
+        $path = $this->path($file);
+
+        if ($this->disk->put($path, $stream) === false) {
+            throw new RuntimeException("Unable to write [{$path}] to the artifact disk.");
+        }
     }
 
     /**

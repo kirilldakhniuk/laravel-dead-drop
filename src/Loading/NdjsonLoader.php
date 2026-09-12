@@ -4,13 +4,16 @@ declare(strict_types=1);
 
 namespace DeadDrop\DeadDrop\Loading;
 
+use DeadDrop\DeadDrop\Artifacts\ArtifactReader;
 use DeadDrop\DeadDrop\Artifacts\TableManifest;
 use Illuminate\Database\Connection;
 
 /**
- * Inserts the rows of a gzipped NDJSON table file through the query builder.
+ * Reads a table's gzipped NDJSON file through the artifact reader — which
+ * decodes each line back into a row with its scalar types restored — and
+ * inserts those rows through the query builder a chunk at a time.
  *
- * The reader hands rows over one at a time and only a single chunk is held,
+ * The reader yields one row at a time and only a single chunk is ever held,
  * so a table larger than memory still loads.
  */
 final class NdjsonLoader implements Loader
@@ -29,16 +32,13 @@ final class NdjsonLoader implements Loader
         return 'ndjson';
     }
 
-    /**
-     * @param  iterable<int, array<string, mixed>>  $rows
-     */
-    public function load(TableManifest $table, iterable $rows, Connection $target): int
+    public function load(TableManifest $table, ArtifactReader $reader, string $artifactId, Connection $target): int
     {
         $written = 0;
         $chunk = [];
         $size = $this->chunkSize($table);
 
-        foreach ($rows as $row) {
+        foreach ($reader->rows($artifactId, $table) as $row) {
             $chunk[] = $row;
 
             if (count($chunk) === $size) {

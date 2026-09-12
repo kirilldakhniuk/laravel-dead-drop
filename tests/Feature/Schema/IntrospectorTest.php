@@ -28,6 +28,18 @@ it('reads columns with normalised types and nullability', function () {
         ->and($orders->column('id')->autoIncrement)->toBeTrue();
 });
 
+it('reads a boolean column as bool and a wider tinyint as an integer', function () {
+    // Laravel's SQLite grammar writes `boolean` as `tinyint(1)`; the width is
+    // the only thing telling the two apart, and it is in `type`, not
+    // `type_name`, so this pins that the full native type reaches the driver.
+    DB::connection('dd_test')->statement('CREATE TABLE flags (id integer primary key autoincrement, active tinyint(1) not null, status tinyint(4) not null)');
+
+    $flags = app(Introspector::class)->inspect('dd_test')->table('flags');
+
+    expect($flags->column('active')->type)->toBe(ColumnType::Boolean)
+        ->and($flags->column('status')->type)->toBe(ColumnType::Integer);
+});
+
 it('reads the primary key and unique indexes', function () {
     $users = app(Introspector::class)->inspect('dd_test')->table('users');
 

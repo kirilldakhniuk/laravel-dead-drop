@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 use DeadDrop\DeadDrop\Tests\Fixtures\SchemaBuilder;
+use Illuminate\Support\Facades\Schema;
 
 beforeEach(fn () => SchemaBuilder::migrate('dd_test'));
 
@@ -37,6 +38,16 @@ it('records edge sources, redactions, windows and morphs in the written config',
         ->and($config['orders']['window'])->toBe('created_at')
         ->and($config['comments']['morph'])->toBe(['type' => 'commentable_type', 'id' => 'commentable_id'])
         ->and($config['failed_jobs'])->toBe(['class' => 'skip', 'columns' => ['id', 'payload']]);
+});
+
+it('hands back a suggestion its own gate would reject as review', function () {
+    // `*_key` suggests `null`, which the gate refuses on a NOT NULL column —
+    // writing it would mean init produced a config check and dump both fail.
+    Schema::connection('dd_test')->table('companies', fn ($t) => $t->string('api_key')->default(''));
+
+    $config = require initFixtureConfig().'/dd_test.php';
+
+    expect($config['companies']['redact']['api_key'])->toBe('review');
 });
 
 it('forces tables named in --skip to skip', function () {

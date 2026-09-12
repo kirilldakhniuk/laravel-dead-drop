@@ -76,7 +76,9 @@ final class TableFileWriter
             }
 
             try {
-                $this->disk->put($this->path, $stream);
+                if ($this->disk->put($this->path, $stream) === false) {
+                    throw new RuntimeException("Unable to write [{$this->path}] to the artifact disk.");
+                }
             } finally {
                 if (is_resource($stream)) {
                     fclose($stream);

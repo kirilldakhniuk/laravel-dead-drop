@@ -8,6 +8,7 @@ use DeadDrop\DeadDrop\Artifacts\Manifest;
 use DeadDrop\DeadDrop\Artifacts\RowCodec;
 use DeadDrop\DeadDrop\Artifacts\TableManifest;
 use DeadDrop\DeadDrop\Schema\ColumnType;
+use Illuminate\Contracts\Filesystem\Filesystem;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 
@@ -126,6 +127,82 @@ it('decodes postgres style boolean strings', function () {
 
     expect($true['ok'])->toBeTrue()
         ->and($false['ok'])->toBeFalse();
+});
+
+it('reads back a row far longer than the read buffer in one piece', function () {
+    // `gzgets()` returns at most its buffer size, so a row wider than that
+    // arrives in fragments; decoding a fragment is a JSON error at pull time.
+    $long = str_repeat('x', 1_500_000);
+    $disk = Storage::disk('local');
+    $writer = new ArtifactWriter($disk, 'dead-drops', '20260912-141500-111111');
+    $types = ['id' => ColumnType::Integer, 'name' => ColumnType::String];
+
+    $file = $writer->table('dd_test.things.ndjson.gz', $types);
+    $file->append(['id' => 1, 'name' => $long]);
+    $file->append(['id' => 2, 'name' => 'short']);
+    $counts = $file->finish();
+
+    $table = new TableManifest('dd_test', 'things', 'dd_test.things.ndjson.gz', 'ndjson', $counts['rows'], $counts['bytes'], 'id', [
+        ['name' => 'id', 'type' => 'int'], ['name' => 'name', 'type' => 'string'],
+    ], []);
+
+    $rows = iterator_to_array((new ArtifactReader($disk, 'dead-drops'))->rows('20260912-141500-111111', $table), false);
+
+    expect($rows)->toHaveCount(2)
+        ->and($rows[0]['name'])->toBe($long)
+        ->and($rows[1]['name'])->toBe('short');
+});
+
+it('leaves a non boolean value on a boolean column alone', function () {
+    // A MySQL `tinyint(4)` narrowed to a boolean by an older introspection
+    // still has to arrive at the target as the number it was.
+    $codec = new RowCodec;
+    $types = ['ok' => ColumnType::Boolean];
+
+    expect($codec->decode($codec->encode(['ok' => 5], $types), $types)['ok'])->toBe(5)
+        ->and($codec->decode($codec->encode(['ok' => 1], $types), $types)['ok'])->toBeTrue()
+        ->and($codec->decode($codec->encode(['ok' => 0], $types), $types)['ok'])->toBeFalse();
+});
+
+it('throws when the disk refuses a table file', function () {
+    $disk = Mockery::mock(Filesystem::class);
+    $disk->shouldReceive('put')->andReturn(false);
+
+    $writer = new ArtifactWriter($disk, 'dead-drops', '20260912-141500-222222');
+    $file = $writer->table('dd_test.things.ndjson.gz', ['id' => ColumnType::Integer]);
+    $file->append(['id' => 1]);
+
+    expect(fn () => $file->finish())
+        ->toThrow(RuntimeException::class, 'Unable to write [dead-drops/20260912-141500-222222/dd_test.things.ndjson.gz] to the artifact disk.');
+});
+
+it('throws when the disk refuses the manifest or a put', function () {
+    $disk = Mockery::mock(Filesystem::class);
+    $disk->shouldReceive('put')->andReturn(false);
+
+    $writer = new ArtifactWriter($disk, 'dead-drops', '20260912-141500-333333');
+    $manifest = new Manifest('20260912-141500-333333', Manifest::STATUS_WRITING, '2026-09-12T14:15:00+00:00', 'dev', 'dd_test.things:1', null, 'php', [], [], []);
+
+    expect(fn () => $writer->writeManifest($manifest))
+        ->toThrow(RuntimeException::class, 'Unable to write [dead-drops/20260912-141500-333333/manifest.json] to the artifact disk.')
+        ->and(fn () => $writer->put('dd_test.things.csv', 'id,name'))
+        ->toThrow(RuntimeException::class, 'Unable to write [dead-drops/20260912-141500-333333/dd_test.things.csv] to the artifact disk.');
+});
+
+it('puts an executor written file into the artifact directory', function () {
+    $writer = new ArtifactWriter(Storage::disk('local'), 'dead-drops', '20260912-141500-444444');
+
+    $writer->put('dd_test.things.csv', "id,name\n1,acme\n");
+
+    expect(Storage::disk('local')->get('dead-drops/20260912-141500-444444/dd_test.things.csv'))->toBe("id,name\n1,acme\n");
+});
+
+it('reports a corrupt manifest by artifact id', function () {
+    writeSampleArtifact('20260912-141500-aaaaaa');
+    Storage::disk('local')->put('dead-drops/20260912-141500-aaaaaa/manifest.json', '{not json');
+
+    expect(fn () => (new ArtifactReader(Storage::disk('local'), 'dead-drops'))->manifest('20260912-141500-aaaaaa'))
+        ->toThrow(InvalidArgumentException::class, 'Artifact [20260912-141500-aaaaaa] has a corrupt manifest.');
 });
 
 it('reads a binary value from a stream before encoding it', function () {

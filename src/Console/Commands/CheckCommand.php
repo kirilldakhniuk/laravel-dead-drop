@@ -5,15 +5,20 @@ declare(strict_types=1);
 namespace DeadDrop\DeadDrop\Console\Commands;
 
 use DeadDrop\DeadDrop\Config\ConfigLoader;
+use DeadDrop\DeadDrop\Config\ConnectionConfig;
 use DeadDrop\DeadDrop\Config\DriftDetector;
+use DeadDrop\DeadDrop\Config\TableClass;
 use DeadDrop\DeadDrop\Inference\SensitiveColumnDetector;
+use DeadDrop\DeadDrop\Redaction\RedactionRules;
+use DeadDrop\DeadDrop\Schema\DatabaseSchema;
 use DeadDrop\DeadDrop\Schema\Introspector;
 use Illuminate\Console\Command;
 
 /**
  * Compares each connection's live schema against its reviewed config and
- * fails when they disagree, or when a sensitive column has no redaction
- * decision. Safe to run in CI: fully non-interactive, no writes.
+ * fails when they disagree, when a sensitive column has no redaction
+ * decision, or when a `redact` entry is one the extraction gate would
+ * refuse. Safe to run in CI: fully non-interactive, no writes.
  */
 final class CheckCommand extends Command
 {
@@ -23,7 +28,7 @@ final class CheckCommand extends Command
     /** @var string */
     protected $description = "Detect drift between a connection's schema and its reviewed DeadDrop config";
 
-    public function handle(Introspector $introspector, SensitiveColumnDetector $sensitive, ConfigLoader $loader): int
+    public function handle(Introspector $introspector, SensitiveColumnDetector $sensitive, ConfigLoader $loader, RedactionRules $rules): int
     {
         $directory = $this->directory();
         $connections = $this->connections($loader, $directory);
@@ -63,8 +68,9 @@ final class CheckCommand extends Command
 
             $schema = $introspector->inspect($connection);
             $report = $detector->detect($schema, $config);
+            $invalid = $this->invalidRedactions($rules, $config, $schema);
 
-            if (! $report->hasDrift()) {
+            if (! $report->hasDrift() && $invalid === []) {
                 $this->line('  clean');
 
                 continue;
@@ -75,9 +81,45 @@ final class CheckCommand extends Command
             foreach ($report->toLines() as $line) {
                 $this->line($line);
             }
+
+            if ($invalid !== []) {
+                $this->line('Invalid redaction entries:');
+
+                foreach ($invalid as $line) {
+                    $this->line("  - {$line}");
+                }
+            }
         }
 
         return $drifted ? self::FAILURE : self::SUCCESS;
+    }
+
+    /**
+     * The `redact` entries the extraction gate would refuse. `dead-drop:dump`
+     * runs the same rules, so CI has to run them too — a green check and a
+     * dump that will not start is the worst of both.
+     *
+     * @return list<string>
+     */
+    private function invalidRedactions(RedactionRules $rules, ConnectionConfig $config, DatabaseSchema $schema): array
+    {
+        $lines = [];
+
+        foreach ($config->tables as $tableConfig) {
+            if ($tableConfig->removed || $tableConfig->class === TableClass::Skip) {
+                continue;
+            }
+
+            $table = $schema->table($tableConfig->name);
+
+            if ($table === null) {
+                continue; // already reported as a removed table
+            }
+
+            array_push($lines, ...$rules->violations($tableConfig, $table));
+        }
+
+        return $lines;
     }
 
     /**

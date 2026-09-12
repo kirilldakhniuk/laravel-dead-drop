@@ -10,6 +10,7 @@ use DeadDrop\DeadDrop\Artifacts\Manifest;
 use DeadDrop\DeadDrop\Config\ConfigLoader;
 use DeadDrop\DeadDrop\Config\ConfigSet;
 use DeadDrop\DeadDrop\Console\Commands\Concerns\FormatsBytes;
+use DeadDrop\DeadDrop\Console\Commands\Concerns\ResolvesArtifactLocation;
 use DeadDrop\DeadDrop\Extraction\ArtifactBuilder;
 use DeadDrop\DeadDrop\Extraction\ExtractionGate;
 use DeadDrop\DeadDrop\Extraction\TableArtifact;
@@ -41,6 +42,7 @@ use RuntimeException;
 final class DumpCommand extends Command
 {
     use FormatsBytes;
+    use ResolvesArtifactLocation;
 
     /** @var string */
     protected $signature = 'dead-drop:dump {--root= : Root spec, e.g. mysql.companies:1,2} {--full : Dump every configured table whole} {--since= : Only rows on or after this date for windowed tables} {--connection=* : Limit to these connections} {--path= : Config directory} {--disk= : Disk to write the artifact to (defaults to dead-drop.disk)} {--dry-run : Plan only, extract nothing}';
@@ -133,7 +135,7 @@ final class DumpCommand extends Command
         $this->report($plan);
 
         if ($manifest !== null) {
-            $this->info("Artifact: {$this->disk()}:{$this->basePath()}/{$manifest->id}");
+            $this->info("Artifact: {$this->artifactDisk()}:{$this->artifactPath()}/{$manifest->id}");
         }
 
         return self::SUCCESS;
@@ -153,8 +155,8 @@ final class DumpCommand extends Command
             $config,
             $schemas,
             $context,
-            Storage::disk($this->disk()),
-            $this->basePath(),
+            Storage::disk($this->artifactDisk()),
+            $this->artifactPath(),
             function (TableArtifact $artifact): void {
                 $this->line("  {$artifact->connection}.{$artifact->table} … {$artifact->rows} rows");
             },
@@ -234,14 +236,12 @@ final class DumpCommand extends Command
         return is_string($salt) ? $salt : null;
     }
 
-    private function disk(): string
-    {
-        $disk = $this->option('disk');
-
-        return is_string($disk) && $disk !== '' ? $disk : (string) config('dead-drop.disk');
-    }
-
-    private function basePath(): string
+    /**
+     * `--path` names this command's config directory, not a location on the
+     * artifact disk, so the artifact path is always the configured one and
+     * the shared option-reading version is deliberately overridden.
+     */
+    private function artifactPath(): string
     {
         return (string) config('dead-drop.path');
     }

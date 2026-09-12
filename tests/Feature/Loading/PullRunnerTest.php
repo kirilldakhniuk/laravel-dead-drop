@@ -84,6 +84,44 @@ it('rolls a table back on a row count mismatch and restores foreign key checks',
         ->and((int) DB::connection('dd_target')->scalar('PRAGMA foreign_keys'))->toBe(1);
 });
 
+it('refuses a format it has no loader for before writing anything', function () {
+    $manifest = new Manifest('20260101-000000-aaaaaa', Manifest::STATUS_COMPLETE, '2026-01-01T00:00:00+00:00', 'dev', 'dd_test.companies:1', null, 'php', [], [
+        new TableManifest('dd_test', 'companies', 'dd_test.companies.csv', 'csv', 1, 0, 'id', [
+            ['name' => 'id', 'type' => 'int'], ['name' => 'name', 'type' => 'string'], ['name' => 'stripe_id', 'type' => 'string'],
+        ], []),
+    ], []);
+
+    DB::connection('dd_target')->table('companies')->insert(['id' => 1, 'name' => 'Stale', 'stripe_id' => null]);
+
+    expect(fn () => app(PullRunner::class)->run($manifest, new ArtifactReader(Storage::disk('local'), 'dead-drops'), 'dd_target'))
+        ->toThrow(InvalidArgumentException::class, 'No loader for artifact format [csv].')
+        ->and(DB::connection('dd_target')->table('companies')->where('name', 'Stale')->exists())->toBeTrue();
+});
+
+it('refuses before writing when the target needs a column the artifact has no value for', function () {
+    $id = dumpFixture('dd_test.companies:1', initFixtureConfig());
+
+    // SQLite cannot ALTER a NOT NULL column in, so the target table is
+    // rebuilt with one the dump knows nothing about.
+    DB::connection('dd_target')->statement('DROP TABLE orders');
+    DB::connection('dd_target')->statement('CREATE TABLE orders (id integer primary key autoincrement, company_id integer not null, user_id integer not null, customer_id integer, total numeric not null, created_at datetime, extra varchar not null)');
+
+    expect(fn () => pullFixtureArtifact($id))
+        ->toThrow(RuntimeException::class, 'Target table [orders] requires columns the artifact does not carry: extra')
+        ->and(DB::connection('dd_target')->table('companies')->count())->toBe(0);
+});
+
+it('names the table when the target refuses a row', function () {
+    $id = dumpFixture('dd_test.companies:1', initFixtureConfig());
+
+    // A CHECK the target has and the source did not: the engine's message
+    // names the constraint, never which table was being loaded.
+    DB::connection('dd_target')->statement('DROP TABLE order_items');
+    DB::connection('dd_target')->statement('CREATE TABLE order_items (id integer primary key autoincrement, order_id integer not null, sku varchar not null check (sku = \'nothing\'))');
+
+    expect(fn () => pullFixtureArtifact($id))->toThrow(RuntimeException::class, 'Loading [dd_test.order_items] failed:');
+});
+
 it('refuses a manifest holding one bare table name from two connections', function () {
     $columns = [['name' => 'id', 'type' => 'int']];
     $manifest = new Manifest('20260101-000000-aaaaaa', Manifest::STATUS_COMPLETE, '2026-01-01T00:00:00+00:00', 'dev', 'a.users:1', null, 'php', [], [

@@ -35,6 +35,15 @@ it('lists its redacted columns sorted', function () {
     expect(usersRedactor(['password' => 'fixed:x', 'email' => 'hash'])->columns())->toBe(['email', 'password']);
 });
 
+it('does not list a kept column as redacted', function () {
+    // `keep` still runs, as a passthrough; it just never changed anything,
+    // and the manifest's `redacted` list is read as what did.
+    $redactor = usersRedactor(['email' => 'hash', 'password' => 'keep']);
+
+    expect($redactor->columns())->toBe(['email'])
+        ->and($redactor->apply(['email' => 'a@acme.test', 'password' => 'secret'])['password'])->toBe('secret');
+});
+
 it('ignores a configured column missing from the row', function () {
     expect(usersRedactor(['email' => 'hash'])->apply(['id' => 1]))->toBe(['id' => 1]);
 });

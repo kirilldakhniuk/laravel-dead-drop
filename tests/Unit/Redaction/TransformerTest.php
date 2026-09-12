@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 use DeadDrop\DeadDrop\Redaction\RedactionContext;
 use DeadDrop\DeadDrop\Redaction\TransformerFactory;
+use DeadDrop\DeadDrop\Redaction\Transformers\ScrambleTransformer;
 use DeadDrop\DeadDrop\Schema\Column;
 use DeadDrop\DeadDrop\Schema\ColumnType;
 use Illuminate\Support\Facades\Hash;
@@ -39,6 +40,18 @@ it('hashes an email column into a reserved domain address', function () {
 
     expect($out)->toMatch('/^[0-9a-f]{16}@example\.test$/')
         ->and(transformerFor('hash', stringColumn('billing_email'))->apply('a@acme.test', ['id' => 1]))->toBe($out);
+});
+
+it('shortens the hex of an email hash to fit a narrow column', function () {
+    // 21 characters is 8 hex + '@' + 'example.test' — the shortest address
+    // the rules allow — and the result still has to be one address, not a
+    // domain cut in half.
+    expect(transformerFor('hash', stringColumn('email', 'varchar(21)'))->apply('a@acme.test', ['id' => 1]))
+        ->toMatch('/^[0-9a-f]{8}@example\.test$/')
+        ->and(transformerFor('hash', stringColumn('email', 'varchar(25)'))->apply('a@acme.test', ['id' => 1]))
+        ->toMatch('/^[0-9a-f]{12}@example\.test$/')
+        ->and(transformerFor('hash', stringColumn('email', 'varchar(40)'))->apply('a@acme.test', ['id' => 1]))
+        ->toMatch('/^[0-9a-f]{16}@example\.test$/');
 });
 
 it('masks all but the last four characters', function () {
@@ -83,6 +96,15 @@ it('keeps the time part when scrambling a datetime', function () {
 it('refuses scramble on a non date column', function () {
     transformerFor('scramble', stringColumn('name'));
 })->throws(InvalidArgumentException::class, 'scramble');
+
+it('refuses scramble on a time or year column', function () {
+    $time = new Column('clock', ColumnType::DateTime, 'time', true, false, null);
+    $year = new Column('vintage', ColumnType::DateTime, 'year', true, false, null);
+
+    expect(fn () => transformerFor('scramble', $time))->toThrow(InvalidArgumentException::class, '[clock] is time')
+        ->and(fn () => transformerFor('scramble', $year))->toThrow(InvalidArgumentException::class, '[vintage] is year')
+        ->and(transformerFor('scramble', new Column('at', ColumnType::DateTime, 'timestamp', true, false, null)))->toBeInstanceOf(ScrambleTransformer::class);
+});
 
 it('computes one bcrypt hash per value and reuses it', function () {
     $context = redactionContext();

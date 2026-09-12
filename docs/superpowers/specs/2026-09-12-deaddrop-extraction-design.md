@@ -51,7 +51,7 @@ interface Executor
     public function supports(string $connectionDriver): bool;
 
     /** Export one plan step: read rows scoped by $keys (null for a whole lookup table), redact, write, and describe the file. */
-    public function export(PlanStep $step, Table $table, TableConfig $config, ?KeySet $keys, ArtifactWriter $writer): TableArtifact;
+    public function export(PlanStep $step, Table $table, TableConfig $config, ?KeySet $keys, Redactor $redactor, ArtifactWriter $writer): TableArtifact;
 }
 ```
 
@@ -100,7 +100,7 @@ Root: `{disk}:{path}/{dump-id}/` where `dump-id` is `Ymd-His-<6 random lowercase
 }
 ```
 
-`tables` is in plan-step order (parents before children), which is also load order. `columns[].type` is the phase-1 `ColumnType` backing value; loaders use it to restore scalars (integers, booleans, decimals as strings, datetimes as strings, JSON columns as JSON text, binary as base64 with a `"__base64": true` wrapper). `status` is written as `writing` first and flipped to `complete` last, so a crash leaves an artifact that `pull` refuses and `dumps` flags.
+`tables` is in plan-step order (parents before children), which is also load order. `columns[].type` is the phase-1 `ColumnType` backing value; loaders use it to restore scalars (integers, booleans, decimals as strings, datetimes as strings, JSON columns as JSON text, binary as base64 with a `{"__base64": "<payload>"}` wrapper). `status` is written as `writing` first and flipped to `complete` last, so a crash leaves an artifact that `pull` refuses and `dumps` flags.
 
 `ArtifactWriter` and `ArtifactReader` are the only classes that know this layout. Both use `Storage::disk($disk)`. Writing streams: the writer opens a temporary local gzip stream per table, appends rows, and moves the finished file to the disk with `Storage::put(path, stream)`, so S3 gets one upload per table and nothing is buffered in memory.
 
@@ -121,11 +121,11 @@ Transformer semantics (value → result), `null` input always stays `null`:
 | `keep` | passthrough (records a human decision that the flagged column is fine) |
 | `review` | never reaches the redactor — the gate refuses |
 
-Rules: primary key columns and any column that is the source of a configured reference are never redacted; a `redact` entry on one is rejected at the gate with the column named. Redaction runs on collected rows only and cannot change which rows are collected. `hash` uses `hash('sha256', …)` (the arch presets ban `md5`/`sha1`; SHA-256 is also what MySQL `SHA2(…, 256)` and Postgres `pgcrypto` produce, which keeps native executors reproducible).
+Rules: primary key columns and any column that is the source of a configured reference are never redacted; a `redact` entry on one is rejected at the gate with the column named. `hash` and `mask` require a string column; `scramble` requires a date or datetime column — any of the three on a column of the wrong type is rejected at the gate with the column named. Redaction runs on collected rows only and cannot change which rows are collected. `hash` uses `hash('sha256', …)` (the arch presets ban `md5`/`sha1`; SHA-256 is also what MySQL `SHA2(…, 256)` and Postgres `pgcrypto` produce, which keeps native executors reproducible).
 
 ## 7. The fail-closed gate
 
-Before any row moves, `dump` (without `--dry-run`) runs `ExtractionGate::check(ConfigSet, SchemaSet, ExtractionPlan, RedactionContext)` and stops with exit code 1 on the first category that fails, printing the same lines `dead-drop:check` prints:
+Before any row moves, `dump` (without `--dry-run`) runs `ExtractionGate::check(Root $root, ConfigSet $config, SchemaSet $schemas, ?string $salt): GateReport`, which collects every violation across every category rather than stopping at the first, printing the same lines `dead-drop:check` prints. `ExtractionGate::rootIds(Root, ConfigSet, SchemaSet): array` — category 4 alone — is also run under `--dry-run`, since a dry run reads nothing else out of the tables it plans.
 
 1. Drift on any connection in the plan (`DriftDetector`: new/removed tables or columns, undecided sensitive columns, `review` placeholders).
 2. `redaction.salt` missing or shorter than 16 characters.
@@ -144,14 +144,15 @@ Every command remains fully drivable non-interactively.
 
 ## 9. Loading
 
-`Loader` interface: `format(): string; load(TableManifest $table, ArtifactReader $reader, Connection $target, Table $schema): int` returning rows written. `NdjsonLoader` is the only implementation now; `LoaderRegistry` maps `format → Loader` and throws for an unknown format.
+`Loader` interface: `format(): string; load(TableManifest $table, iterable $rows, Connection $target): int` returning rows written, where `$rows` is the already-decoded stream `ArtifactReader::rows()` yields. `NdjsonLoader` is the only implementation now; `LoaderRegistry` maps `format → Loader` and throws for an unknown format.
 
 `PullRunner::run(Manifest, string $targetConnection, callable $progress): PullReport`:
 
 1. Introspect the target once (`Introspector::inspect`).
-2. `driver->disableForeignKeyChecks($connection)` (new `DatabaseDriver` method; MySQL `SET FOREIGN_KEY_CHECKS=0`, Postgres `SET session_replication_role = replica`, SQLite `PRAGMA foreign_keys = OFF`), re-enabled in a `finally` with the matching statement.
-3. For each manifest table in order, skipping and naming tables absent from the target: inside one transaction, `delete` all rows, then insert the artifact rows in chunks of 500 (scalars restored per `columns[].type`), then compare the inserted count with the manifest count and throw on mismatch (rolling the table back).
-4. `pull.after`: each string entry is run as an Artisan command (`Artisan::call`), each class-string entry is resolved from the container and invoked with the `PullReport`.
+2. Check the whole manifest fits before a row moves: refuse (throwing, nothing touched) when the artifact holds the same bare table name from two different connections — a single target cannot hold both — and when a target table that does exist is missing a column the artifact carries; a table the target does not have at all is only skipped and named, not refused.
+3. `driver->disableForeignKeyChecks($connection)` (new `DatabaseDriver` method; MySQL `SET FOREIGN_KEY_CHECKS=0`, Postgres `SET session_replication_role = replica`, SQLite `PRAGMA foreign_keys = OFF`), re-enabled in a `finally` with the matching statement.
+4. For each manifest table in order, skipping and naming tables absent from the target: inside one transaction, `delete` all rows, then insert the artifact rows in chunks of 500 (scalars restored per `columns[].type`), then compare the inserted count with the manifest count and throw on mismatch (rolling the table back).
+5. `pull.after`: each string entry is run as an Artisan command (`Artisan::call`), each class-string entry is resolved from the container and invoked with the `PullReport`.
 
 Replace mode is the only mode. Tables not in the artifact are untouched.
 

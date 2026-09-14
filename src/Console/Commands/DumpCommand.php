@@ -83,7 +83,7 @@ final class DumpCommand extends Command
             // root ids have to hold; an extraction has to clear the whole gate.
             $violations = $dryRun
                 ? $gate->rootIds($root, $config, $schemas)
-                : $gate->check($root, $config, $schemas, $context->salt)->lines();
+                : $gate->check($root, $config, $schemas, $context->salt, $this->configuredSalt())->lines();
 
             if ($violations !== []) {
                 foreach ($violations as $violation) {
@@ -187,6 +187,19 @@ final class DumpCommand extends Command
         foreach ($plan->unresolved as $reference) {
             $this->line("  - {$reference->connection}.{$reference->table}.{$reference->column} — {$reference->reason}");
         }
+    }
+
+    /**
+     * The raw `dead-drop.redaction.salt` value, before APP_KEY derivation —
+     * an empty string counts as unset, same as `SaltResolver`. Only used to
+     * pick the wording of a gate violation; the gate judges the resolved
+     * salt on `$context->salt`, not this one.
+     */
+    private function configuredSalt(): ?string
+    {
+        $salt = config('dead-drop.redaction.salt');
+
+        return is_string($salt) && $salt !== '' ? $salt : null;
     }
 
     /**

@@ -33,7 +33,7 @@ This publishes `config/dead-drop.php`:
 - `model_paths` (default `['app/Models']`) — directories under `base_path()` scanned for Eloquent models when inferring relationships.
 - `disk` (`DEAD_DROP_DISK`, default `local`) / `path` (`DEAD_DROP_PATH`, default `dead-drops`) — where `dead-drop:dump`, `dead-drop:dumps` and `dead-drop:pull` read and write artifacts by default; set `DEAD_DROP_DISK=s3` for a shared handoff.
 - `executor` (`DEAD_DROP_EXECUTOR`, default `php`) — which registered executor moves rows during `dead-drop:dump`.
-- `redaction.salt` (`DEAD_DROP_REDACTION_SALT`, no default, must resolve to at least 16 characters) — when unset, `SaltResolver` derives it from `APP_KEY`, so a dump works with no redaction configuration at all; set it explicitly when several apps must produce identical hashes, or to keep hashes stable across an `APP_KEY` rotation. `redaction.email_domain` (`DEAD_DROP_EMAIL_DOMAIN`, default `example.test`).
+- `redaction.salt` (`DEAD_DROP_REDACTION_SALT`) — defaults to a value derived from `APP_KEY` (`SaltResolver`, `hash('sha256', 'dead-drop|'.$appKey)`, raw string including any `base64:` prefix), so a dump works with no redaction configuration at all; the resolved salt must be at least 16 characters. Set it explicitly when several apps must produce identical hashes, or to keep hashes stable across an `APP_KEY` rotation. `redaction.email_domain` (`DEAD_DROP_EMAIL_DOMAIN`, default `example.test`).
 - `pull.allow_environments` (default `['local', 'staging']`) and `pull.after` (default `[]`, class-strings or Artisan command names run after a successful pull).
 - `binaries.psql` / `binaries.mysql` / `binaries.mysqlsh` — reserved for native executors, which do not ship yet; they do nothing today.
 

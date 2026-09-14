@@ -16,12 +16,12 @@ beforeEach(function () {
     SchemaBuilder::seedTwoCompanies('dd_test');
 });
 
-function gateCheck(string $configDirectory, string $root = 'dd_test.companies:1', ?string $salt = null): array
+function gateCheck(string $configDirectory, string $root = 'dd_test.companies:1', ?string $salt = null, ?string $configuredSalt = null): array
 {
     $config = (new ConfigLoader)->loadAll($configDirectory);
     $schemas = new SchemaSet(['dd_test' => app(Introspector::class)->inspect('dd_test')]);
 
-    return app(ExtractionGate::class)->check(Root::parse($root), $config, $schemas, $salt ?? str_repeat('s', 32))->lines();
+    return app(ExtractionGate::class)->check(Root::parse($root), $config, $schemas, $salt ?? str_repeat('s', 32), $configuredSalt)->lines();
 }
 
 it('passes a clean config with a valid root', function () {
@@ -44,8 +44,8 @@ it('fails on a review placeholder', function () {
     expect(implode("\n", $lines))->toContain('users.email');
 });
 
-it('fails on a short or missing salt', function () {
-    expect(gateCheck(initFixtureConfig(), salt: 'short'))->toContain('redaction.salt is not set and APP_KEY is empty; set DEAD_DROP_REDACTION_SALT (generate one with: openssl rand -hex 16)');
+it('fails when the configured salt is set but too short', function () {
+    expect(gateCheck(initFixtureConfig(), salt: 'short', configuredSalt: 'short'))->toContain('redaction.salt must be at least 16 characters (DEAD_DROP_REDACTION_SALT)');
 });
 
 it('passes when the salt is null but the app key is set', function () {

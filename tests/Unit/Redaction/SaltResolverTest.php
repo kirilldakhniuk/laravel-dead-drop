@@ -36,3 +36,12 @@ it('treats an empty configured salt as unset and falls back to the app key', fun
 it('returns null when the configured salt is empty and there is no app key', function () {
     expect(SaltResolver::resolve('', null))->toBeNull();
 });
+
+it('derives a pinned golden hash for a fixed app key', function () {
+    // Hard-coded rather than recomputed with hash(), so a change to the
+    // 'dead-drop|' separator — which would silently invalidate every
+    // zero-config artifact ever produced — fails this test instead of
+    // passing because both sides moved together.
+    expect(SaltResolver::resolve(null, 'base64:AAAA'))
+        ->toBe('038dd4b0db6dc7a9ba14b9555076a02e48b84b99dbaa87c6cd4f72f6caa7ba81');
+});

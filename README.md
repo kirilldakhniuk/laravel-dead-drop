@@ -41,7 +41,7 @@ This publishes `config/dead-drop.php`:
 - `disk` (`DEAD_DROP_DISK`, default `local`) — the disk `dead-drop:dump`, `dead-drop:dumps` and `dead-drop:pull` read and write artifacts on unless overridden with `--disk=`.
 - `path` (`DEAD_DROP_PATH`, default `dead-drops`) — the base path on that disk under which each dump gets its own `<id>/` directory, unless overridden with `--path=`.
 - `executor` (`DEAD_DROP_EXECUTOR`, default `php`) — which registered `Executor` moves rows during `dead-drop:dump`. See Executors below.
-- `redaction.salt` (`DEAD_DROP_REDACTION_SALT`, no default) — must resolve to at least 16 characters or `dead-drop:dump` refuses to run; see Redaction below for how it is derived when unset.
+- `redaction.salt` (`DEAD_DROP_REDACTION_SALT`) — defaults to a value derived from `APP_KEY` when unset; the resolved salt must be at least 16 characters or `dead-drop:dump` refuses to run. See Redaction below for how the default is derived.
 - `redaction.email_domain` (`DEAD_DROP_EMAIL_DOMAIN`, default `example.test`) — the domain used when `hash` redacts an email-shaped column.
 - `binaries.psql` / `binaries.mysql` / `binaries.mysqlsh` (`DEAD_DROP_PSQL` / `DEAD_DROP_MYSQL` / `DEAD_DROP_MYSQLSH`) — reserved for native executors, which do not ship in this phase; they have no effect yet.
 - `pull.allow_environments` (default `['local', 'staging']`) — the environments `dead-drop:pull` is allowed to run in; it refuses to run anywhere else.
@@ -263,7 +263,7 @@ A `QueryException` during extraction — a hand-written `exclude` fragment, or a
 
 ### Redaction
 
-By default the redaction salt is derived from `APP_KEY` (`SaltResolver`, `hash('sha256', 'dead-drop|'.$appKey)`), so hashes are stable for one app and unguessable without its key — rotating `APP_KEY` changes every hashed value. `DEAD_DROP_REDACTION_SALT` overrides it, which is recommended when several apps must produce identical hashes for the same input, or to keep hashes stable across an `APP_KEY` rotation. Similarly, the artifact disk defaults to `local`; set `DEAD_DROP_DISK=s3` (or another configured disk) for a shared handoff.
+By default the redaction salt is derived from `APP_KEY` (`SaltResolver`, `hash('sha256', 'dead-drop|'.$appKey)`), so hashes are stable for one app and unguessable without its key — rotating `APP_KEY` changes every hashed value. The raw `APP_KEY` string is hashed as configured, `base64:` prefix and all, so changing its representation (re-encoding it, or stripping the prefix) changes every hash even though the key material is the same. `DEAD_DROP_REDACTION_SALT` overrides it, which is recommended when several apps must produce identical hashes for the same input, or to keep hashes stable across an `APP_KEY` rotation. Similarly, the artifact disk defaults to `local`; set `DEAD_DROP_DISK=s3` (or another configured disk) for a shared handoff.
 
 `dead-drop:dump` builds one `Transformer` per `redact` entry from `RedactionContext` (the salt and email domain from config, above) and applies it to every collected row before it is written. `null` values always stay `null`. From the `redact` value:
 
@@ -281,7 +281,7 @@ By default the redaction salt is derived from `APP_KEY` (`SaltResolver`, `hash('
 Rules enforced before any row moves — the extraction gate — cover:
 
 1. schema drift on any connection in the plan (the same checks `dead-drop:check` makes: new/removed tables or columns, undecided sensitive or JSON columns, a leftover `review` placeholder);
-2. `redaction.salt` missing or shorter than 16 characters, after resolving `APP_KEY` (`redaction.salt is not set and APP_KEY is empty; set DEAD_DROP_REDACTION_SALT (generate one with: openssl rand -hex 16)`);
+2. a resolved redaction salt shorter than 16 characters — an explicit `DEAD_DROP_REDACTION_SALT` that is itself too short (`redaction.salt must be at least 16 characters (DEAD_DROP_REDACTION_SALT)`), or nothing resolved at all because both it and `APP_KEY` are empty (`redaction.salt is not set and APP_KEY is empty; set DEAD_DROP_REDACTION_SALT (generate one with: openssl rand -hex 16)`);
 3. invalid redaction placements — `null` on a `NOT NULL` column, `scramble` on anything but a `date`, `datetime` or `timestamp` column (a `time` or `year` column carries no date to shift), `hash`/`mask` on anything but a string column, a truncated `hash` on a unique-indexed column whose declared length cannot keep it distinct (at least 32 characters, or enough to hold the full email form on an email-shaped column), a `hash` on an email-shaped column too narrow to hold `{8 hex}@{email_domain}`, any entry on a primary key or a reference column, or an unknown transformer name — each reported against the column it names;
 4. root ids that do not exist in the root table.
 

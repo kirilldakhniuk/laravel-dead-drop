@@ -26,7 +26,11 @@ final class ExtractionGate
         private readonly RedactionRules $rules,
     ) {}
 
-    public function check(Root $root, ConfigSet $config, SchemaSet $schemas, ?string $salt): GateReport
+    /**
+     * @param  ?string  $configuredSalt  the raw `dead-drop.redaction.salt` value, before APP_KEY derivation —
+     *                                   used only to choose the wording of a salt violation, never its own length.
+     */
+    public function check(Root $root, ConfigSet $config, SchemaSet $schemas, ?string $salt, ?string $configuredSalt = null): GateReport
     {
         $lines = [];
 
@@ -41,7 +45,9 @@ final class ExtractionGate
         }
 
         if ($salt === null || strlen($salt) < 16) {
-            $lines[] = 'redaction.salt is not set and APP_KEY is empty; set DEAD_DROP_REDACTION_SALT (generate one with: openssl rand -hex 16)';
+            $lines[] = $configuredSalt !== null && $configuredSalt !== ''
+                ? 'redaction.salt must be at least 16 characters (DEAD_DROP_REDACTION_SALT)'
+                : 'redaction.salt is not set and APP_KEY is empty; set DEAD_DROP_REDACTION_SALT (generate one with: openssl rand -hex 16)';
         }
 
         foreach ($config->connections() as $connection) {

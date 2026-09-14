@@ -38,7 +38,11 @@ class DeadDropServiceProvider extends ServiceProvider
         // from APP_KEY so a dump works with no redaction configuration at
         // all. Every other consumer resolves this binding rather than
         // building its own RedactionContext, so there is exactly one salt.
-        $this->app->singleton(RedactionContext::class, function (Application $app): RedactionContext {
+        // Scoped, not a plain singleton: a queue worker or Octane resets
+        // scoped instances between jobs/requests, so a runtime change to
+        // app.key or dead-drop.redaction.* is picked up rather than frozen
+        // for the process lifetime.
+        $this->app->scoped(RedactionContext::class, function (Application $app): RedactionContext {
             $config = $app->make('config');
 
             $salt = SaltResolver::resolve(

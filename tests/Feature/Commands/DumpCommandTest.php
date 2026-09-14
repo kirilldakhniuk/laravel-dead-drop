@@ -8,6 +8,7 @@ use DeadDrop\DeadDrop\Extraction\Executor;
 use DeadDrop\DeadDrop\Extraction\ExecutorManager;
 use DeadDrop\DeadDrop\Planning\Planner;
 use DeadDrop\DeadDrop\Planning\Root;
+use DeadDrop\DeadDrop\Redaction\RedactionContext;
 use DeadDrop\DeadDrop\Schema\Introspector;
 use DeadDrop\DeadDrop\Schema\SchemaSet;
 use DeadDrop\DeadDrop\Tests\Fixtures\SchemaBuilder;
@@ -73,12 +74,35 @@ it('prints progress and the artifact location', function () {
 it('refuses to extract when the gate fails and writes nothing', function () {
     $path = initFixtureConfig();
     config()->set('dead-drop.redaction.salt', null);
+    config()->set('app.key', '');
+    app()->forgetInstance(RedactionContext::class);
 
     $this->artisan('dead-drop:dump', ['table' => 'companies', 'ids' => ['1'], '--connection' => 'dd_test', '--path' => $path, '--disk' => 'local'])
-        ->expectsOutputToContain('redaction.salt must be set')
+        ->expectsOutputToContain('redaction.salt is not set and APP_KEY is empty')
         ->assertFailed();
 
     expect(Storage::disk('local')->allFiles())->toBe([]);
+});
+
+it('dumps with zero configuration when APP_KEY is set', function () {
+    $path = initFixtureConfig();
+    config()->set('dead-drop.redaction.salt', null);
+    config()->set('app.key', 'base64:some-app-key');
+    app()->forgetInstance(RedactionContext::class);
+
+    $this->artisan('dead-drop:dump', ['table' => 'companies', 'ids' => ['1'], '--connection' => 'dd_test', '--path' => $path, '--disk' => 'local'])
+        ->assertSuccessful();
+
+    $reader = new ArtifactReader(Storage::disk('local'), 'dead-drops');
+    $manifest = $reader->manifest(latestArtifactId());
+    $users = collect($manifest->tables)->firstWhere('table', 'users');
+    $rows = iterator_to_array($reader->rows($manifest->id, $users), false);
+
+    expect($rows)->not->toBeEmpty();
+
+    foreach ($rows as $row) {
+        expect($row['email'])->toMatch('/^[0-9a-f]+@example\.test$/');
+    }
 });
 
 it('refuses an executor that does not support the source driver', function () {

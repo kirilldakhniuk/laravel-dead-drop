@@ -3,7 +3,9 @@
 declare(strict_types=1);
 
 return [
-    'disk' => env('DEAD_DROP_DISK', 's3'),
+    // Filesystem disk dead-drop:dump, dead-drop:dumps and dead-drop:pull read and write artifacts on. Defaults to
+    // 'local'; set DEAD_DROP_DISK=s3 (or another configured disk) for a shared handoff.
+    'disk' => env('DEAD_DROP_DISK', 'local'),
     'path' => env('DEAD_DROP_PATH', 'dead-drops'),
 
     // Directory (relative to config_path()) holding one <connection>.php per enrolled connection.
@@ -16,6 +18,8 @@ return [
     'executor' => env('DEAD_DROP_EXECUTOR', 'php'),
 
     'redaction' => [
+        // When unset, derived from APP_KEY (DeadDrop\DeadDrop\Redaction\SaltResolver) so a dump works with no
+        // redaction configuration at all. Set DEAD_DROP_REDACTION_SALT to pin the salt across apps or key rotations.
         'salt' => env('DEAD_DROP_REDACTION_SALT'),
         'email_domain' => env('DEAD_DROP_EMAIL_DOMAIN', 'example.test'),
     ],

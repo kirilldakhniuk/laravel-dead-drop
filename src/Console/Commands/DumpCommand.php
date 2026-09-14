@@ -53,7 +53,7 @@ final class DumpCommand extends Command
     /** @var string */
     protected $description = 'Dump a redacted, referentially complete slice of a root row set';
 
-    public function handle(Planner $planner, ConfigLoader $loader, Introspector $introspector, KeySetRepository $keys, ExtractionGate $gate, ArtifactBuilder $builder): int
+    public function handle(Planner $planner, ConfigLoader $loader, Introspector $introspector, KeySetRepository $keys, ExtractionGate $gate, ArtifactBuilder $builder, RedactionContext $context): int
     {
         try {
             $config = $loader->loadAll($this->directory());
@@ -83,7 +83,7 @@ final class DumpCommand extends Command
             // root ids have to hold; an extraction has to clear the whole gate.
             $violations = $dryRun
                 ? $gate->rootIds($root, $config, $schemas)
-                : $gate->check($root, $config, $schemas, $this->salt())->lines();
+                : $gate->check($root, $config, $schemas, $context->salt)->lines();
 
             if ($violations !== []) {
                 foreach ($violations as $violation) {
@@ -97,7 +97,7 @@ final class DumpCommand extends Command
 
             if (! $dryRun) {
                 $phase = 'Extraction';
-                $manifest = $this->extract($builder, $plan, $root, $since, $config, $schemas);
+                $manifest = $this->extract($builder, $plan, $root, $since, $config, $schemas, $context);
             }
         } catch (UnsupportedTableException|CircularConnectionException|InvalidArgumentException $e) {
             $this->error($e->getMessage());
@@ -131,13 +131,8 @@ final class DumpCommand extends Command
         return self::SUCCESS;
     }
 
-    private function extract(ArtifactBuilder $builder, ExtractionPlan $plan, Root $root, ?DateTimeImmutable $since, ConfigSet $config, SchemaSet $schemas): Manifest
+    private function extract(ArtifactBuilder $builder, ExtractionPlan $plan, Root $root, ?DateTimeImmutable $since, ConfigSet $config, SchemaSet $schemas, RedactionContext $context): Manifest
     {
-        $context = new RedactionContext(
-            (string) config('dead-drop.redaction.salt'),
-            (string) config('dead-drop.redaction.email_domain'),
-        );
-
         return $builder->build(
             $plan,
             $root,
@@ -192,13 +187,6 @@ final class DumpCommand extends Command
         foreach ($plan->unresolved as $reference) {
             $this->line("  - {$reference->connection}.{$reference->table}.{$reference->column} — {$reference->reason}");
         }
-    }
-
-    private function salt(): ?string
-    {
-        $salt = config('dead-drop.redaction.salt');
-
-        return is_string($salt) ? $salt : null;
     }
 
     /**

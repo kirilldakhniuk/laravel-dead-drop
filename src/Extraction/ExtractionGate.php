@@ -41,7 +41,7 @@ final class ExtractionGate
         }
 
         if ($salt === null || strlen($salt) < 16) {
-            $lines[] = 'redaction.salt must be set to at least 16 characters (DEAD_DROP_REDACTION_SALT)';
+            $lines[] = 'redaction.salt is not set and APP_KEY is empty; set DEAD_DROP_REDACTION_SALT (generate one with: openssl rand -hex 16)';
         }
 
         foreach ($config->connections() as $connection) {

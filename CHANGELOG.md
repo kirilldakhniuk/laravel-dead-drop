@@ -13,6 +13,7 @@
 - `dead-drop:dump` names its root the way the rest of Artisan does — `dead-drop:dump companies 1 2 --connection=mysql`, with comma-separated ids allowed — and prompts for the connection, table, ids and whether to plan or extract when they are not given; run non-interactively it prompts for nothing and names the argument to pass instead.
 - Added `dead-drop:dump --all`, which dumps every `data` and `lookup` table whole instead of a slice of a root row — on the named connection, or on every configured one — with the same fail-closed gate and redaction as a root dump. Taking every table whole means `window`, `exclude` and `--since` are not applied (`--all --since=` is refused for now; time-boxing a whole database is a planned follow-up) and the result is referentially complete by construction, so there is nothing to traverse and no unresolved references to report. An interactive run offers it as the first table choice.
 - Native executors (`mysqldump`, `mysqlsh`, `psql`) and composite primary keys are not implemented yet.
+- `dead-drop:dump` now works with zero configuration: the artifact disk defaults to `local` instead of `s3`, and the redaction salt is derived from `APP_KEY` (`DeadDrop\DeadDrop\Redaction\SaltResolver`) when `DEAD_DROP_REDACTION_SALT` is not set; the gate's message when both are missing changed to `redaction.salt is not set and APP_KEY is empty; set DEAD_DROP_REDACTION_SALT (generate one with: openssl rand -hex 16)`.
 
 ## [v0.1.0](https://github.com/kirilldakhniuk/laravel-dead-drop/compare/...v0.1.0) - 202x-xx-xx
 

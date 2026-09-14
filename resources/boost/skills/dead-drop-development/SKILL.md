@@ -31,9 +31,9 @@ This publishes `config/dead-drop.php`:
 
 - `config_path` (default `dead-drop`) — directory under `config_path()` holding one `<connection>.php` file per enrolled connection.
 - `model_paths` (default `['app/Models']`) — directories under `base_path()` scanned for Eloquent models when inferring relationships.
-- `disk` (`DEAD_DROP_DISK`, default `s3`) / `path` (`DEAD_DROP_PATH`, default `dead-drops`) — where `dead-drop:dump`, `dead-drop:dumps` and `dead-drop:pull` read and write artifacts by default.
+- `disk` (`DEAD_DROP_DISK`, default `local`) / `path` (`DEAD_DROP_PATH`, default `dead-drops`) — where `dead-drop:dump`, `dead-drop:dumps` and `dead-drop:pull` read and write artifacts by default; set `DEAD_DROP_DISK=s3` for a shared handoff.
 - `executor` (`DEAD_DROP_EXECUTOR`, default `php`) — which registered executor moves rows during `dead-drop:dump`.
-- `redaction.salt` (`DEAD_DROP_REDACTION_SALT`, required, at least 16 characters) and `redaction.email_domain` (`DEAD_DROP_EMAIL_DOMAIN`, default `example.test`).
+- `redaction.salt` (`DEAD_DROP_REDACTION_SALT`, no default, must resolve to at least 16 characters) — when unset, `SaltResolver` derives it from `APP_KEY`, so a dump works with no redaction configuration at all; set it explicitly when several apps must produce identical hashes, or to keep hashes stable across an `APP_KEY` rotation. `redaction.email_domain` (`DEAD_DROP_EMAIL_DOMAIN`, default `example.test`).
 - `pull.allow_environments` (default `['local', 'staging']`) and `pull.after` (default `[]`, class-strings or Artisan command names run after a successful pull).
 - `binaries.psql` / `binaries.mysql` / `binaries.mysqlsh` — reserved for native executors, which do not ship yet; they do nothing today.
 
@@ -72,7 +72,7 @@ The root is an argument, not a spec: `dead-drop:dump companies 1 2`, or `dead-dr
 
 `--all` dumps the whole database instead of a slice: every `data` and `lookup` table with rows, whole, on the named connection (or on every configured one when nothing names or infers a single connection). It takes no table or ids — `--all cannot be combined with a table or ids.` — and no `--since`, which is refused outright; `window`, `exclude` and `--since` scope a traversal, and taking every table whole does none, which is exactly what makes the result referentially complete by construction (nothing is traversed, so there are never unresolved references). Time-boxing a whole database is a planned follow-up, not something to work around. The gate, the redaction and the composite-primary-key refusal all apply exactly as they do to a root dump. In an interactive terminal the same thing is offered as the first table choice, `Whole database (every data and lookup table)`.
 
-`--dry-run` plans without extracting: it prints the row count and estimated size per table plus any unresolved references, and still validates that every root id exists. Without `--dry-run`, the plan is put through a fail-closed gate (schema drift, a missing or short `redaction.salt`, invalid `redact` placements, nonexistent root ids) before a single row moves; on success it writes a `manifest.json` (`status: "writing"`), exports every table through the configured `Executor` with each row redacted, flips the manifest to `status: "complete"`, and prints `Artifact: {disk}:{path}/{id}`.
+`--dry-run` plans without extracting: it prints the row count and estimated size per table plus any unresolved references, and still validates that every root id exists. Without `--dry-run`, the plan is put through a fail-closed gate (schema drift, a redaction salt shorter than 16 characters after resolving `APP_KEY`, invalid `redact` placements, nonexistent root ids) before a single row moves; on success it writes a `manifest.json` (`status: "writing"`), exports every table through the configured `Executor` with each row redacted, flips the manifest to `status: "complete"`, and prints `Artifact: {disk}:{path}/{id}`.
 
 Because the traversal's key sets are temporary tables scoped to one database session, `dead-drop:dump` pins its reads to the write connection: on MySQL the connection needs `CREATE TEMPORARY TABLES`, and a transaction-pooled connection (e.g. PgBouncer in transaction mode) cannot be used.
 
@@ -101,7 +101,7 @@ Read before executing:
 
 ## Examples
 
-- A team enabling Dead Drop on a fresh app: publish the config, set `DEAD_DROP_REDACTION_SALT`, run `dead-drop:init --connection=mysql`, review the generated `config/dead-drop/mysql.php` (confirm `redact` entries, fix any `review` placeholders), then add `php artisan dead-drop:check` as a CI step after migrations.
+- A team enabling Dead Drop on a fresh app: publish the config (the redaction salt derives from `APP_KEY` and the disk defaults to `local`, so no configuration is required to get started), run `dead-drop:init --connection=mysql`, review the generated `config/dead-drop/mysql.php` (confirm `redact` entries, fix any `review` placeholders), then add `php artisan dead-drop:check` as a CI step after migrations.
 - Producing a support-ticket slice: `php artisan dead-drop:dump companies 482 --connection=mysql --disk=local` to write a redacted artifact, then `php artisan dead-drop:pull --connection=staging` to load it into a staging database.
 - Refreshing a whole staging database: `php artisan dead-drop:dump --all --connection=mysql`, then `php artisan dead-drop:pull --connection=staging`.
 - Registering a custom executor from a service provider: inject `DeadDrop\DeadDrop\Extraction\ExecutorManager` and call `$executors->extend('mysqlsh', fn () => new MySqlShellExecutor)`, then select it with `DEAD_DROP_EXECUTOR=mysqlsh`.

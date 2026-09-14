@@ -5,6 +5,7 @@ declare(strict_types=1);
 use DeadDrop\DeadDrop\Config\ConfigLoader;
 use DeadDrop\DeadDrop\Extraction\ExtractionGate;
 use DeadDrop\DeadDrop\Planning\Root;
+use DeadDrop\DeadDrop\Redaction\SaltResolver;
 use DeadDrop\DeadDrop\Schema\Introspector;
 use DeadDrop\DeadDrop\Schema\SchemaSet;
 use DeadDrop\DeadDrop\Tests\Fixtures\SchemaBuilder;
@@ -44,7 +45,22 @@ it('fails on a review placeholder', function () {
 });
 
 it('fails on a short or missing salt', function () {
-    expect(gateCheck(initFixtureConfig(), salt: 'short'))->toContain('redaction.salt must be set to at least 16 characters (DEAD_DROP_REDACTION_SALT)');
+    expect(gateCheck(initFixtureConfig(), salt: 'short'))->toContain('redaction.salt is not set and APP_KEY is empty; set DEAD_DROP_REDACTION_SALT (generate one with: openssl rand -hex 16)');
+});
+
+it('passes when the salt is null but the app key is set', function () {
+    config()->set('app.key', 'base64:some-app-key');
+
+    expect(gateCheck(initFixtureConfig(), salt: SaltResolver::resolve(null, config('app.key'))))->toBe([]);
+});
+
+it('fails with the zero-configuration message when both the salt and the app key are empty', function () {
+    config()->set('app.key', '');
+    config()->set('dead-drop.redaction.salt', null);
+
+    $salt = SaltResolver::resolve(config('dead-drop.redaction.salt'), config('app.key'));
+
+    expect(gateCheck(initFixtureConfig(), salt: (string) $salt))->toContain('redaction.salt is not set and APP_KEY is empty; set DEAD_DROP_REDACTION_SALT (generate one with: openssl rand -hex 16)');
 });
 
 it('fails on an invalid redaction placement', function () {

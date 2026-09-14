@@ -38,10 +38,10 @@ This publishes `config/dead-drop.php`:
 
 - `config_path` — the directory (relative to `config_path()`) holding one `<connection>.php` file per enrolled connection. Defaults to `dead-drop`, i.e. `config/dead-drop/<connection>.php`.
 - `model_paths` — directories (relative to `base_path()`) scanned for Eloquent models when inferring relationships. Defaults to `['app/Models']`.
-- `disk` (`DEAD_DROP_DISK`, default `s3`) — the disk `dead-drop:dump`, `dead-drop:dumps` and `dead-drop:pull` read and write artifacts on unless overridden with `--disk=`.
+- `disk` (`DEAD_DROP_DISK`, default `local`) — the disk `dead-drop:dump`, `dead-drop:dumps` and `dead-drop:pull` read and write artifacts on unless overridden with `--disk=`.
 - `path` (`DEAD_DROP_PATH`, default `dead-drops`) — the base path on that disk under which each dump gets its own `<id>/` directory, unless overridden with `--path=`.
 - `executor` (`DEAD_DROP_EXECUTOR`, default `php`) — which registered `Executor` moves rows during `dead-drop:dump`. See Executors below.
-- `redaction.salt` (`DEAD_DROP_REDACTION_SALT`, no default) — must be at least 16 characters or `dead-drop:dump` refuses to run.
+- `redaction.salt` (`DEAD_DROP_REDACTION_SALT`, no default) — must resolve to at least 16 characters or `dead-drop:dump` refuses to run; see Redaction below for how it is derived when unset.
 - `redaction.email_domain` (`DEAD_DROP_EMAIL_DOMAIN`, default `example.test`) — the domain used when `hash` redacts an email-shaped column.
 - `binaries.psql` / `binaries.mysql` / `binaries.mysqlsh` (`DEAD_DROP_PSQL` / `DEAD_DROP_MYSQL` / `DEAD_DROP_MYSQLSH`) — reserved for native executors, which do not ship in this phase; they have no effect yet.
 - `pull.allow_environments` (default `['local', 'staging']`) — the environments `dead-drop:pull` is allowed to run in; it refuses to run anywhere else.
@@ -58,12 +58,7 @@ php artisan dead-drop:dump --all      # every data and lookup table, whole
 php artisan dead-drop:pull --connection=local_copy
 ```
 
-A real dump needs two environment variables:
-
-- `DEAD_DROP_REDACTION_SALT` — at least 16 characters. `dead-drop:dump` refuses to extract anything without it.
-- `DEAD_DROP_DISK` — the filesystem disk artifacts are written to and read from (default `s3`).
-
-`dead-drop:dump` prompts for anything you do not pass it — the connection, the root table, its ids, and whether to plan or extract — and asks for nothing at all when it is run non-interactively.
+A real dump works with no configuration at all — see Redaction below for how the salt and disk default. `dead-drop:dump` prompts for anything you do not pass it — the connection, the root table, its ids, and whether to plan or extract — and asks for nothing at all when it is run non-interactively.
 
 ## Usage
 
@@ -214,7 +209,7 @@ php artisan dead-drop:dump --all --connection=mysql
 - `--since=` — only take rows on or after this date for tables with a `window` column, for a narrower plan.
 - `--all` — dump every `data` and `lookup` table whole instead of a slice; it cannot be combined with a table, ids or `--since`. See below.
 - `--path=` — config directory. Defaults to `config_path(config('dead-drop.config_path'))`.
-- `--disk=` — disk to write the artifact to. Defaults to `dead-drop.disk` (`DEAD_DROP_DISK`, default `s3`).
+- `--disk=` — disk to write the artifact to. Defaults to `dead-drop.disk` (`DEAD_DROP_DISK`, default `local`).
 - `--dry-run` — plan only; extract nothing.
 
 Run in an interactive terminal, anything you leave out is asked for: which connection (only when several are configured and the default connection has no config), which table (the connection's `data` and `lookup` tables, most-referenced first, as a list or — past fifteen tables — a search box), which ids, and finally whether to plan or extract. Anything you did pass is never asked for, and a run that named its root in full — connection, table and ids — is never asked about the mode either: it dumps unless `--dry-run` says otherwise.
@@ -268,6 +263,8 @@ A `QueryException` during extraction — a hand-written `exclude` fragment, or a
 
 ### Redaction
 
+By default the redaction salt is derived from `APP_KEY` (`SaltResolver`, `hash('sha256', 'dead-drop|'.$appKey)`), so hashes are stable for one app and unguessable without its key — rotating `APP_KEY` changes every hashed value. `DEAD_DROP_REDACTION_SALT` overrides it, which is recommended when several apps must produce identical hashes for the same input, or to keep hashes stable across an `APP_KEY` rotation. Similarly, the artifact disk defaults to `local`; set `DEAD_DROP_DISK=s3` (or another configured disk) for a shared handoff.
+
 `dead-drop:dump` builds one `Transformer` per `redact` entry from `RedactionContext` (the salt and email domain from config, above) and applies it to every collected row before it is written. `null` values always stay `null`. From the `redact` value:
 
 | `redact` value | result |
@@ -284,7 +281,7 @@ A `QueryException` during extraction — a hand-written `exclude` fragment, or a
 Rules enforced before any row moves — the extraction gate — cover:
 
 1. schema drift on any connection in the plan (the same checks `dead-drop:check` makes: new/removed tables or columns, undecided sensitive or JSON columns, a leftover `review` placeholder);
-2. `redaction.salt` missing or shorter than 16 characters (`redaction.salt must be set to at least 16 characters (DEAD_DROP_REDACTION_SALT)`);
+2. `redaction.salt` missing or shorter than 16 characters, after resolving `APP_KEY` (`redaction.salt is not set and APP_KEY is empty; set DEAD_DROP_REDACTION_SALT (generate one with: openssl rand -hex 16)`);
 3. invalid redaction placements — `null` on a `NOT NULL` column, `scramble` on anything but a `date`, `datetime` or `timestamp` column (a `time` or `year` column carries no date to shift), `hash`/`mask` on anything but a string column, a truncated `hash` on a unique-indexed column whose declared length cannot keep it distinct (at least 32 characters, or enough to hold the full email form on an email-shaped column), a `hash` on an email-shaped column too narrow to hold `{8 hex}@{email_domain}`, any entry on a primary key or a reference column, or an unknown transformer name — each reported against the column it names;
 4. root ids that do not exist in the root table.
 

@@ -19,7 +19,7 @@ it('goes from init through check, dump and pull to a redacted, referentially com
 
     $this->artisan('dead-drop:init', ['--connection' => ['dd_test'], '--path' => $path, '--no-interaction' => true])->assertSuccessful();
     $this->artisan('dead-drop:check', ['--connection' => ['dd_test'], '--path' => $path])->assertExitCode(0);
-    $this->artisan('dead-drop:dump', ['--root' => 'dd_test.companies:1', '--path' => $path, '--disk' => 'local'])->assertSuccessful();
+    $this->artisan('dead-drop:dump', ['table' => 'companies', 'ids' => ['1'], '--connection' => 'dd_test', '--path' => $path, '--disk' => 'local'])->assertSuccessful();
     $this->artisan('dead-drop:pull', ['--connection' => 'dd_target', '--disk' => 'local', '--force' => true])->assertSuccessful();
 
     $target = DB::connection('dd_target');

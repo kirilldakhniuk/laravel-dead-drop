@@ -7,8 +7,10 @@ namespace DeadDrop\DeadDrop\Console\Commands;
 use DeadDrop\DeadDrop\Artifacts\ArtifactReader;
 use DeadDrop\DeadDrop\Console\Commands\Concerns\FormatsBytes;
 use DeadDrop\DeadDrop\Console\Commands\Concerns\ResolvesArtifactLocation;
+use DeadDrop\DeadDrop\Planning\Root;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\Storage;
+use InvalidArgumentException;
 use Throwable;
 
 /**
@@ -55,7 +57,7 @@ final class DumpsCommand extends Command
             $rows[] = [
                 $id,
                 $manifest->createdAt,
-                $manifest->root,
+                $this->root($manifest->root),
                 $manifest->status,
                 (string) count($manifest->tables),
                 (string) $manifest->totalRows(),
@@ -66,5 +68,19 @@ final class DumpsCommand extends Command
         $this->table(['Id', 'Created', 'Root', 'Status', 'Tables', 'Rows', 'Size'], $rows);
 
         return self::SUCCESS;
+    }
+
+    /**
+     * The manifest stores the root as the spec the planner reads; the listing
+     * shows it the way `dead-drop:dump` is now typed. A spec no longer in that
+     * shape is still shown as it stands rather than dropping the row.
+     */
+    private function root(string $spec): string
+    {
+        try {
+            return Root::parse($spec)->describe();
+        } catch (InvalidArgumentException) {
+            return $spec;
+        }
     }
 }

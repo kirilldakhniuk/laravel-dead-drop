@@ -58,9 +58,15 @@ function latestArtifactId(): string
 function dumpFixture(string $root = 'dd_test.companies:1', ?string $configDirectory = null): string
 {
     $directory = $configDirectory ?? initFixtureConfig();
+    $parsed = Root::parse($root);
 
-    test()->artisan('dead-drop:dump', ['--root' => $root, '--path' => $directory, '--disk' => 'local'])
-        ->assertSuccessful();
+    test()->artisan('dead-drop:dump', [
+        'table' => $parsed->table,
+        'ids' => array_map('strval', $parsed->ids),
+        '--connection' => $parsed->connection,
+        '--path' => $directory,
+        '--disk' => 'local',
+    ])->assertSuccessful();
 
     return latestArtifactId();
 }

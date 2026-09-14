@@ -66,7 +66,7 @@ final class ArtifactBuilder
             status: Manifest::STATUS_WRITING,
             createdAt: $now->format(DateTimeInterface::ATOM),
             packageVersion: $this->packageVersion(),
-            root: "{$root->connection}.{$root->table}:".implode(',', $root->ids),
+            root: $root->spec(),
             since: $since?->format(DateTimeInterface::ATOM),
             executor: $executor->name(),
             connections: $connections,

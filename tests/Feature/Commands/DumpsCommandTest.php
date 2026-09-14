@@ -32,6 +32,9 @@ it('lists artifacts newest first', function () {
     expect($ids)->toHaveCount(2)
         ->and($exitCode)->toBe(0)
         ->and($output)->toContain('complete')
+        // The root is listed the way an operator would type it back, not as
+        // the manifest's storage spec.
+        ->toContain('companies #1 (dd_test)')
         ->and(strpos($output, $ids[0]))->toBeLessThan(strpos($output, $ids[1]));
 });
 

@@ -28,7 +28,7 @@ final readonly class ConfigSet
         return isset($this->connections[$connection]);
     }
 
-    /** @return array<int, string> */
+    /** @return list<string> */
     public function connections(): array
     {
         return array_keys($this->connections);

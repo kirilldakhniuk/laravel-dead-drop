@@ -19,7 +19,7 @@ beforeEach(function () {
 it('reports row counts per table', function () {
     $path = initFixtureConfig();
 
-    $this->artisan('dead-drop:dump', ['--root' => 'dd_test.companies:1', '--path' => $path, '--dry-run' => true])
+    $this->artisan('dead-drop:dump', ['table' => 'companies', 'ids' => ['1'], '--connection' => 'dd_test', '--path' => $path, '--dry-run' => true])
         ->expectsOutputToContain('orders')
         ->expectsOutputToContain('order_items')
         ->expectsOutputToContain('Total rows')
@@ -43,7 +43,7 @@ it('orders parents before children', function () {
 it('reports unresolved references', function () {
     $path = initFixtureConfig();
 
-    $this->artisan('dead-drop:dump', ['--root' => 'dd_test.companies:1', '--path' => $path, '--dry-run' => true])
+    $this->artisan('dead-drop:dump', ['table' => 'companies', 'ids' => ['1'], '--connection' => 'dd_test', '--path' => $path, '--dry-run' => true])
         ->expectsOutputToContain('Unresolved references')
         ->expectsOutputToContain('users.failed_job_id')
         ->assertSuccessful();
@@ -57,16 +57,8 @@ it('refuses a table with a composite primary key', function () {
     });
     $path = initFixtureConfig();
 
-    $this->artisan('dead-drop:dump', ['--root' => 'dd_test.companies:1', '--path' => $path, '--dry-run' => true])
+    $this->artisan('dead-drop:dump', ['table' => 'companies', 'ids' => ['1'], '--connection' => 'dd_test', '--path' => $path, '--dry-run' => true])
         ->expectsOutputToContain('composite primary key')
-        ->assertFailed();
-});
-
-it('still refuses --full', function () {
-    $path = initFixtureConfig();
-
-    $this->artisan('dead-drop:dump', ['--root' => 'dd_test.companies:1', '--path' => $path, '--full' => true])
-        ->expectsOutputToContain('--full is not implemented yet')
         ->assertFailed();
 });
 
@@ -74,7 +66,7 @@ it('writes no files and leaves no key tables behind', function () {
     Storage::fake('s3');
     $path = initFixtureConfig();
 
-    $this->artisan('dead-drop:dump', ['--root' => 'dd_test.companies:1', '--path' => $path, '--dry-run' => true]);
+    $this->artisan('dead-drop:dump', ['table' => 'companies', 'ids' => ['1'], '--connection' => 'dd_test', '--path' => $path, '--dry-run' => true]);
 
     expect(Storage::disk('s3')->allFiles())->toBe([])
         ->and(collect(Schema::connection('dd_test')->getTables())->pluck('name')->filter(fn ($n) => str_starts_with($n, 'dd_keys_'))->all())->toBe([]);
@@ -90,7 +82,7 @@ it('fails clearly when a hand written exclude fragment is not valid SQL', functi
         (string) file_get_contents($file),
     ));
 
-    $this->artisan('dead-drop:dump', ['--root' => 'dd_test.companies:1', '--path' => $path, '--dry-run' => true])
+    $this->artisan('dead-drop:dump', ['table' => 'companies', 'ids' => ['1'], '--connection' => 'dd_test', '--path' => $path, '--dry-run' => true])
         ->expectsOutputToContain('Planning failed')
         ->assertFailed();
 });
@@ -98,7 +90,7 @@ it('fails clearly when a hand written exclude fragment is not valid SQL', functi
 it('refuses a dry run whose root id does not exist', function () {
     $path = initFixtureConfig();
 
-    $this->artisan('dead-drop:dump', ['--root' => 'dd_test.companies:999', '--path' => $path, '--dry-run' => true])
+    $this->artisan('dead-drop:dump', ['table' => 'companies', 'ids' => ['999'], '--connection' => 'dd_test', '--path' => $path, '--dry-run' => true])
         ->expectsOutputToContain('Root id 999 does not exist in dd_test.companies')
         ->assertFailed();
 });

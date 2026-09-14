@@ -11,6 +11,7 @@ use DeadDrop\DeadDrop\Planning\Root;
 use DeadDrop\DeadDrop\Schema\Introspector;
 use DeadDrop\DeadDrop\Schema\SchemaSet;
 use DeadDrop\DeadDrop\Tests\Fixtures\SchemaBuilder;
+use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Facades\Storage;
 
@@ -62,7 +63,7 @@ it('exports only the root ids when the root table is a lookup table', function (
 it('prints progress and the artifact location', function () {
     $path = initFixtureConfig();
 
-    $this->artisan('dead-drop:dump', ['--root' => 'dd_test.companies:1', '--path' => $path, '--disk' => 'local'])
+    $this->artisan('dead-drop:dump', ['table' => 'companies', 'ids' => ['1'], '--connection' => 'dd_test', '--path' => $path, '--disk' => 'local'])
         ->expectsOutputToContain('dd_test.orders')
         ->expectsOutputToContain('Artifact: local:dead-drops/')
         ->assertSuccessful();
@@ -72,7 +73,7 @@ it('refuses to extract when the gate fails and writes nothing', function () {
     $path = initFixtureConfig();
     config()->set('dead-drop.redaction.salt', null);
 
-    $this->artisan('dead-drop:dump', ['--root' => 'dd_test.companies:1', '--path' => $path, '--disk' => 'local'])
+    $this->artisan('dead-drop:dump', ['table' => 'companies', 'ids' => ['1'], '--connection' => 'dd_test', '--path' => $path, '--disk' => 'local'])
         ->expectsOutputToContain('redaction.salt must be set')
         ->assertFailed();
 
@@ -87,7 +88,7 @@ it('refuses an executor that does not support the source driver', function () {
     app(ExecutorManager::class)->extend('custom', fn () => $executor);
     config()->set('dead-drop.executor', 'custom');
 
-    $this->artisan('dead-drop:dump', ['--root' => 'dd_test.companies:1', '--path' => $path, '--disk' => 'local'])
+    $this->artisan('dead-drop:dump', ['table' => 'companies', 'ids' => ['1'], '--connection' => 'dd_test', '--path' => $path, '--disk' => 'local'])
         ->expectsOutputToContain('does not support the sqlite driver')
         ->assertFailed();
 
@@ -100,4 +101,91 @@ it('leaves no key tables behind after a real dump', function () {
     $leftovers = collect(Schema::connection('dd_test')->getTables())->pluck('name')->filter(fn ($n) => str_starts_with($n, 'dd_keys_'))->all();
 
     expect($leftovers)->toBe([]);
+});
+
+it('uses the only configured connection without asking', function () {
+    $path = initFixtureConfig();
+
+    $this->artisan('dead-drop:dump', ['table' => 'companies', 'ids' => ['1'], '--path' => $path, '--dry-run' => true])
+        ->expectsOutputToContain('Using connection [dd_test].')
+        ->assertSuccessful();
+});
+
+it('accepts several ids as arguments and as a comma list', function () {
+    $path = initFixtureConfig();
+
+    $plan = function (array $ids) use ($path): string {
+        Artisan::call('dead-drop:dump', ['table' => 'companies', 'ids' => $ids, '--connection' => 'dd_test', '--path' => $path, '--dry-run' => true]);
+
+        return Artisan::output();
+    };
+
+    expect($plan(['1', '2']))->toMatch('/companies\s*\|\s*2\s*\|/')
+        ->and($plan(['1,2']))->toMatch('/companies\s*\|\s*2\s*\|/');
+});
+
+it('prompts for table, ids and mode when run bare', function () {
+    $path = initFixtureConfig();
+
+    // The table choices are ordered by how much of the schema points at them,
+    // so the row an operator is most likely to want is the first one offered.
+    $this->artisan('dead-drop:dump', ['--path' => $path])
+        ->expectsChoice('Which table holds the root row?', 'companies', ['companies', 'users', 'customers', 'orders', 'comments', 'countries', 'order_items'], true)
+        ->expectsQuestion('Which id(s)? Separate several with commas', '1')
+        ->expectsChoice('What now?', 'plan', ['plan' => 'Plan only (dry run)', 'dump' => 'Dump to local:dead-drops'])
+        ->expectsOutputToContain('Total rows')
+        ->assertSuccessful();
+
+    expect(Storage::disk('local')->allFiles())->toBe([]);
+});
+
+it('prompts for the connection when several are configured and none is default', function () {
+    SchemaBuilder::migrate('dd_analytics');
+    $path = tempDirectory();
+    $this->artisan('dead-drop:init', ['--connection' => ['dd_test', 'dd_analytics'], '--path' => $path, '--no-interaction' => true])->assertSuccessful();
+    config()->set('database.default', 'sqlite');
+
+    $this->artisan('dead-drop:dump', ['--path' => $path])
+        ->expectsChoice('Which connection holds the root row?', 'dd_test', ['dd_analytics', 'dd_test'])
+        ->expectsChoice('Which table holds the root row?', 'companies', ['companies', 'users', 'customers', 'orders', 'comments', 'countries', 'order_items'])
+        ->expectsQuestion('Which id(s)? Separate several with commas', '1')
+        ->expectsChoice('What now?', 'plan', ['plan' => 'Plan only (dry run)', 'dump' => 'Dump to local:dead-drops'])
+        ->assertSuccessful();
+});
+
+it('fails with guidance when non-interactive and incomplete', function () {
+    $path = initFixtureConfig();
+
+    $this->artisan('dead-drop:dump', ['--path' => $path, '--no-interaction' => true])
+        ->expectsOutputToContain('Pass a table argument')
+        ->assertFailed();
+
+    $this->artisan('dead-drop:dump', ['table' => 'companies', '--path' => $path, '--no-interaction' => true])
+        ->expectsOutputToContain('Pass one or more ids')
+        ->assertFailed();
+
+    SchemaBuilder::migrate('dd_analytics');
+    $both = tempDirectory();
+    $this->artisan('dead-drop:init', ['--connection' => ['dd_test', 'dd_analytics'], '--path' => $both, '--no-interaction' => true])->assertSuccessful();
+    config()->set('database.default', 'sqlite');
+
+    $this->artisan('dead-drop:dump', ['--path' => $both, '--no-interaction' => true])
+        ->expectsOutputToContain('configured connections: dd_analytics, dd_test')
+        ->assertFailed();
+});
+
+it('refuses a table that is not configured for dumping', function () {
+    $path = initFixtureConfig();
+
+    $this->artisan('dead-drop:dump', ['table' => 'failed_jobs', 'ids' => ['1'], '--path' => $path, '--dry-run' => true])
+        ->expectsOutputToContain('is not configured for dumping')
+        ->assertFailed();
+});
+
+it('refuses an unknown connection', function () {
+    $path = initFixtureConfig();
+
+    $this->artisan('dead-drop:dump', ['table' => 'companies', 'ids' => ['1'], '--connection' => 'nope', '--path' => $path, '--dry-run' => true])
+        ->expectsOutputToContain('Unknown database connection [nope].')
+        ->assertFailed();
 });

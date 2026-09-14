@@ -11,6 +11,7 @@ use DeadDrop\DeadDrop\Config\ConfigLoader;
 use DeadDrop\DeadDrop\Config\ConfigSet;
 use DeadDrop\DeadDrop\Console\Commands\Concerns\FormatsBytes;
 use DeadDrop\DeadDrop\Console\Commands\Concerns\ResolvesArtifactLocation;
+use DeadDrop\DeadDrop\Console\Commands\Concerns\ResolvesDumpRoot;
 use DeadDrop\DeadDrop\Extraction\ArtifactBuilder;
 use DeadDrop\DeadDrop\Extraction\ExtractionGate;
 use DeadDrop\DeadDrop\Extraction\TableArtifact;
@@ -27,7 +28,6 @@ use DeadDrop\DeadDrop\Schema\Introspector;
 use DeadDrop\DeadDrop\Schema\SchemaSet;
 use Illuminate\Console\Command;
 use Illuminate\Database\QueryException;
-use Illuminate\Support\Arr;
 use Illuminate\Support\Facades\Storage;
 use InvalidArgumentException;
 use RuntimeException;
@@ -44,32 +44,18 @@ final class DumpCommand extends Command
 {
     use FormatsBytes;
     use ResolvesArtifactLocation;
+    use ResolvesDumpRoot;
 
     /** @var string */
-    protected $signature = 'dead-drop:dump {--root= : Root spec, e.g. mysql.companies:1,2} {--full : Dump every configured table whole} {--since= : Only rows on or after this date for windowed tables} {--connection=* : Limit to these connections} {--path= : Config directory} {--disk= : Disk to write the artifact to (defaults to dead-drop.disk)} {--dry-run : Plan only, extract nothing}';
+    protected $signature = 'dead-drop:dump {table? : Root table} {ids?* : One or more root row ids} {--connection= : Connection holding the root table} {--since= : Only rows on or after this date for windowed tables} {--dry-run : Plan only, extract nothing} {--disk= : Disk to write the artifact to (defaults to dead-drop.disk)} {--path= : Config directory}';
 
     /** @var string */
     protected $description = 'Dump a redacted, referentially complete slice of a root row set';
 
     public function handle(Planner $planner, ConfigLoader $loader, Introspector $introspector, KeySetRepository $keys, ExtractionGate $gate, ArtifactBuilder $builder): int
     {
-        if ($this->option('full') === true) {
-            $this->error('--full is not implemented yet');
-
-            return self::FAILURE;
-        }
-
-        $spec = $this->option('root');
-
-        if (! is_string($spec) || trim($spec) === '') {
-            $this->error('Pass --root=connection.table:id[,id] to plan a dump.');
-
-            return self::FAILURE;
-        }
-
         try {
-            $root = Root::parse(trim($spec));
-            $config = $this->config($loader->loadAll($this->directory()));
+            $config = $loader->loadAll($this->directory());
             $since = $this->since();
         } catch (InvalidArgumentException|DateMalformedStringException $e) {
             $this->error($e->getMessage());
@@ -77,13 +63,13 @@ final class DumpCommand extends Command
             return self::FAILURE;
         }
 
-        if (! $config->has($root->connection)) {
-            $this->error("No config for connection [{$root->connection}] — run dead-drop:init --connection={$root->connection}");
+        $root = $this->resolveRoot($config);
 
+        if ($root === null) {
             return self::FAILURE;
         }
 
-        $dryRun = $this->option('dry-run') === true;
+        $dryRun = $this->planOnly($this->artifactDisk(), $this->artifactPath());
         $phase = 'Planning';
 
         try {
@@ -162,30 +148,6 @@ final class DumpCommand extends Command
                 $this->line("  {$artifact->connection}.{$artifact->table} … {$artifact->rows} rows");
             },
         );
-    }
-
-    /**
-     * The configured connections, narrowed to `--connection` when it is given.
-     *
-     * @throws InvalidArgumentException when a named connection is not a database connection
-     */
-    private function config(ConfigSet $config): ConfigSet
-    {
-        $only = array_values(array_map('strval', Arr::wrap($this->option('connection'))));
-
-        if ($only === []) {
-            return $config;
-        }
-
-        $known = array_keys((array) config('database.connections'));
-
-        foreach ($only as $connection) {
-            if (! in_array($connection, $known, true)) {
-                throw new InvalidArgumentException("Unknown database connection [{$connection}].");
-            }
-        }
-
-        return new ConfigSet(array_intersect_key($config->connections, array_flip($only)));
     }
 
     private function schemas(ConfigSet $config, Introspector $introspector): SchemaSet

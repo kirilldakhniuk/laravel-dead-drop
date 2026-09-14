@@ -10,7 +10,7 @@
     <a href="https://packagist.org/packages/kirilldakhniuk/laravel-dead-drop"><img src="https://img.shields.io/packagist/dt/kirilldakhniuk/laravel-dead-drop.svg?style=flat-square" alt="Total Downloads"></a>
 </p>
 
-Dead Drop is a Laravel package that discovers your database schema, builds a reviewed per-connection config describing how each table should be classified, scoped and redacted, detects drift between that config and the live schema, dumps a redacted, referentially-complete slice of a root row — everything it points to or that points at it — to a portable artifact, and pulls that artifact into a local or staging database. Native executors (`mysqldump`, `mysqlsh`, `psql`), composite primary keys, `--full` (whole-database) dumps and schema creation on the target are not implemented yet. Requires PHP ^8.3, the `zlib` extension (artifacts are gzipped) and Laravel 12 or 13.
+Dead Drop is a Laravel package that discovers your database schema, builds a reviewed per-connection config describing how each table should be classified, scoped and redacted, detects drift between that config and the live schema, dumps a redacted, referentially-complete slice of a root row — everything it points to or that points at it — to a portable artifact, and pulls that artifact into a local or staging database. Native executors (`mysqldump`, `mysqlsh`, `psql`), composite primary keys, whole-database dumps and schema creation on the target are not implemented yet. Requires PHP ^8.3, the `zlib` extension (artifacts are gzipped) and Laravel 12 or 13.
 
 ## Installation
 
@@ -46,6 +46,23 @@ This publishes `config/dead-drop.php`:
 - `binaries.psql` / `binaries.mysql` / `binaries.mysqlsh` (`DEAD_DROP_PSQL` / `DEAD_DROP_MYSQL` / `DEAD_DROP_MYSQLSH`) — reserved for native executors, which do not ship in this phase; they have no effect yet.
 - `pull.allow_environments` (default `['local', 'staging']`) — the environments `dead-drop:pull` is allowed to run in; it refuses to run anywhere else.
 - `pull.after` (default `[]`) — class-strings or Artisan command strings run after a successful `dead-drop:pull`. See Pulling below.
+
+## Quick start
+
+```bash
+php artisan dead-drop:init            # discover the schema, write config/dead-drop/<connection>.php
+php artisan dead-drop:check           # fail-closed drift + redaction gate (use it in CI)
+php artisan dead-drop:dump            # interactive: pick connection, table, ids, plan or dump
+php artisan dead-drop:dump users 1 --dry-run
+php artisan dead-drop:pull --connection=local_copy
+```
+
+A real dump needs two environment variables:
+
+- `DEAD_DROP_REDACTION_SALT` — at least 16 characters. `dead-drop:dump` refuses to extract anything without it.
+- `DEAD_DROP_DISK` — the filesystem disk artifacts are written to and read from (default `s3`).
+
+`dead-drop:dump` prompts for anything you do not pass it — the connection, the root table, its ids, and whether to plan or extract — and asks for nothing at all when it is run non-interactively.
 
 ## Usage
 
@@ -185,17 +202,23 @@ or when a named connection has no config file at all (it tells you to run `dead-
 `dead-drop:dump` plans a referentially-complete row set starting from one root row and — unless `--dry-run` — extracts it into a redacted artifact:
 
 ```bash
-php artisan dead-drop:dump --root=mysql.companies:1
+php artisan dead-drop:dump companies 1
+php artisan dead-drop:dump companies 1 2 --connection=mysql --dry-run
 ```
 
-- `--root=` — the row to start from, as `connection.table:id[,id]` (a comma-separated list of ids is allowed).
+- `table` — the table the root row lives in. It must be a `data` or `lookup` table in that connection's config; anything else fails with `Table [x] is not configured for dumping on connection [c].`
+- `ids` — one or more root row ids, as separate arguments (`companies 1 2`) or one comma-separated argument (`companies 1,2`).
+- `--connection=` — the connection holding the root table. Every connection in the config directory is still loaded, because a cross-connection reference needs them; this only says where the traversal starts. Left out, the command uses the only configured connection, or your default connection when that one has a config, and says which it picked (`Using connection [mysql].`).
 - `--since=` — only take rows on or after this date for tables with a `window` column, for a narrower plan.
-- `--connection=` (repeatable) — limit the plan to these connections.
 - `--path=` — config directory. Defaults to `config_path(config('dead-drop.config_path'))`.
 - `--disk=` — disk to write the artifact to. Defaults to `dead-drop.disk` (`DEAD_DROP_DISK`, default `s3`).
 - `--dry-run` — plan only; extract nothing.
 
-`--full` is not implemented yet; passing it fails with `--full is not implemented yet` rather than doing something partial.
+Run in an interactive terminal, anything you leave out is asked for: which connection (only when several are configured and the default connection has no config), which table (the connection's `data` and `lookup` tables, most-referenced first, as a list or — past fifteen tables — a search box), which ids, and finally whether to plan or extract. Anything you did pass is never asked for, and a run that named its table and ids in full is never asked about the mode either: it dumps unless `--dry-run` says otherwise.
+
+Non-interactively — `--no-interaction`, or anywhere without a terminal — nothing is ever prompted for. A missing piece fails with the argument to pass instead: `Pass a table argument, e.g. dead-drop:dump users 1 --connection=mysql.`, `Pass one or more ids, e.g. dead-drop:dump users 1 --connection=mysql.`, or `Pass --connection=<name>; configured connections: analytics, mysql.`
+
+Dumping every configured table whole is not implemented.
 
 #### Planning
 
@@ -209,7 +232,7 @@ The plan is printed as a table of connection, table, row count and estimated siz
 - a reference an ascending pass cannot follow — because its target table is not configured, is `skip`ped, has no single-column primary key, or (for a declared edge) the target column is not that table's primary key — is recorded as an **unresolved reference** with a reason, but only once some collected row actually carries a non-null value in that column; an edge nothing ever points along is never reported, and never fails the plan. A polymorphic column whose type value resolves to nothing (an old value no model answers to any more) or names a table not configured for the dump is recorded the same way;
 - a table with a composite primary key, or no primary key at all, cannot be addressed by this scheme and makes the whole plan fail with a clear error before anything is traversed.
 
-`--dry-run` stops here, after checking that every id in `--root` exists (an id that does not is reported as `Root id {id} does not exist in {connection}.{table}` and fails the command).
+`--dry-run` stops here, after checking that every root id exists (an id that does not is reported as `Root id {id} does not exist in {connection}.{table}` and fails the command).
 
 #### Extraction
 
@@ -223,7 +246,7 @@ Without `--dry-run`, the plan is put through the extraction gate before a single
 
 A `QueryException` during extraction — a hand-written `exclude` fragment, or a `window` column that turns out not to be one — is reported as `Extraction failed: {message}` and exits 1, leaving the manifest at `status: "writing"`; `dead-drop:dumps` (below) flags it and `dead-drop:pull` refuses to load it.
 
-**Phase boundary:** native executors, composite primary keys and `--full` (dumping every configured table whole) are not implemented in this phase.
+**Phase boundary:** native executors, composite primary keys and whole-database dumps (every configured table, whole) are not implemented in this phase.
 
 ### Redaction
 

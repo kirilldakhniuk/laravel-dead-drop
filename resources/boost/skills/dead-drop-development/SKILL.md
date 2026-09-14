@@ -13,7 +13,7 @@ metadata:
 
 Use this skill when a Laravel application needs to adopt the Dead Drop package: enrolling a database connection, reviewing the config it generates, gating CI on drift, dumping a redacted slice of a row and everything it depends on, listing artifacts, or pulling an artifact into a local or staging database.
 
-Dead Drop discovers a connection's schema, writes a reviewed `<connection>.php` config describing how each table should be classified, scoped and redacted, detects drift between that config and the live schema, dumps a referentially-complete, redacted artifact starting from one root row, and pulls that artifact into a target connection. Native executors (`mysqldump`, `mysqlsh`, `psql`), composite primary keys, `--full` (whole-database) dumps, and schema creation on the target are not implemented — do not tell a consumer they can use them.
+Dead Drop discovers a connection's schema, writes a reviewed `<connection>.php` config describing how each table should be classified, scoped and redacted, detects drift between that config and the live schema, dumps a referentially-complete, redacted artifact starting from one root row, and pulls that artifact into a target connection. Native executors (`mysqldump`, `mysqlsh`, `psql`), composite primary keys, whole-database dumps, and schema creation on the target are not implemented — do not tell a consumer they can use them.
 
 ## Primary Goal
 
@@ -65,10 +65,12 @@ Non-interactive, makes no writes, and exits non-zero when the schema and config 
 ### 5. Dump a redacted, referentially-complete slice
 
 ```bash
-php artisan dead-drop:dump --root=<connection>.<table>:<id>[,<id>...] [--since=<date>] [--connection=<name> ...] [--path=<dir>] [--disk=<disk>] [--dry-run]
+php artisan dead-drop:dump [<table>] [<id> ...] [--connection=<name>] [--since=<date>] [--dry-run] [--disk=<disk>] [--path=<dir>]
 ```
 
-`--dry-run` plans without extracting: it prints the row count and estimated size per table plus any unresolved references, and still validates that every `--root` id exists. Without `--dry-run`, the plan is put through a fail-closed gate (schema drift, a missing or short `redaction.salt`, invalid `redact` placements, nonexistent root ids) before a single row moves; on success it writes a `manifest.json` (`status: "writing"`), exports every table through the configured `Executor` with each row redacted, flips the manifest to `status: "complete"`, and prints `Artifact: {disk}:{path}/{id}`. `--full` is rejected outright (`--full is not implemented yet`).
+The root is an argument, not a spec: `dead-drop:dump companies 1 2`, or `dead-drop:dump companies 1,2`. `--connection=` names the connection the root table lives on — every configured connection is still loaded, because cross-connection references need them — and is inferred when only one connection is configured or the default connection has a config (`Using connection [mysql].`). Anything left out is prompted for in an interactive terminal (connection, table ordered by inbound references, ids, then plan-or-dump); non-interactively nothing is prompted and the missing argument is named instead. Whole-database dumps are not implemented, and a table that is not a `data` or `lookup` table in the config is refused.
+
+`--dry-run` plans without extracting: it prints the row count and estimated size per table plus any unresolved references, and still validates that every root id exists. Without `--dry-run`, the plan is put through a fail-closed gate (schema drift, a missing or short `redaction.salt`, invalid `redact` placements, nonexistent root ids) before a single row moves; on success it writes a `manifest.json` (`status: "writing"`), exports every table through the configured `Executor` with each row redacted, flips the manifest to `status: "complete"`, and prints `Artifact: {disk}:{path}/{id}`.
 
 Because the traversal's key sets are temporary tables scoped to one database session, `dead-drop:dump` pins its reads to the write connection: on MySQL the connection needs `CREATE TEMPORARY TABLES`, and a transaction-pooled connection (e.g. PgBouncer in transaction mode) cannot be used.
 
@@ -98,12 +100,12 @@ Read before executing:
 ## Examples
 
 - A team enabling Dead Drop on a fresh app: publish the config, set `DEAD_DROP_REDACTION_SALT`, run `dead-drop:init --connection=mysql`, review the generated `config/dead-drop/mysql.php` (confirm `redact` entries, fix any `review` placeholders), then add `php artisan dead-drop:check` as a CI step after migrations.
-- Producing a support-ticket slice: `php artisan dead-drop:dump --root=mysql.companies:482 --disk=local` to write a redacted artifact, then `php artisan dead-drop:pull --connection=staging` to load it into a staging database.
+- Producing a support-ticket slice: `php artisan dead-drop:dump companies 482 --connection=mysql --disk=local` to write a redacted artifact, then `php artisan dead-drop:pull --connection=staging` to load it into a staging database.
 - Registering a custom executor from a service provider: inject `DeadDrop\DeadDrop\Extraction\ExecutorManager` and call `$executors->extend('mysqlsh', fn () => new MySqlShellExecutor)`, then select it with `DEAD_DROP_EXECUTOR=mysqlsh`.
 
 ## Anti-patterns
 
-- Do not document `--full`, native executors (`mysqldump`, `mysqlsh`, `psql`), composite primary keys, or schema creation on the target as available — none of these are implemented.
+- Do not document whole-database dumps, native executors (`mysqldump`, `mysqlsh`, `psql`), composite primary keys, or schema creation on the target as available — none of these are implemented.
 - Do not tell a consumer to configure `binaries.*` for working behavior; it is reserved for native executors and currently does nothing.
 - Do not hand-write a `<connection>.php` config from scratch; always generate it with `dead-drop:init` and then review it.
 - Do not run `dead-drop:pull` against a connection outside `pull.allow_environments`, and never treat it as anything but a full replace of the tables the artifact names.

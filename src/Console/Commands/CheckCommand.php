@@ -130,7 +130,7 @@ final class CheckCommand extends Command
     {
         $connections = array_values(array_map('strval', Arr::wrap($this->option('connection'))));
 
-        return $connections !== [] ? $connections : array_values($loader->loadAll($directory)->connections());
+        return $connections !== [] ? $connections : $loader->loadAll($directory)->connections();
     }
 
     private function directory(): string

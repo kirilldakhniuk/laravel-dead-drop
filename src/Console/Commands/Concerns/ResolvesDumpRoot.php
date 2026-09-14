@@ -69,7 +69,9 @@ trait ResolvesDumpRoot
             return true;
         }
 
-        if (! $this->askedForRoot) {
+        // Only an operator who was asked their way here can be asked again,
+        // and only a terminal can answer.
+        if (! $this->input->isInteractive() || ! $this->askedForRoot) {
             return false;
         }
 
@@ -157,6 +159,15 @@ trait ResolvesDumpRoot
     private function rootTable(ConnectionConfig $config): ?string
     {
         $tables = $this->dumpableTables($config);
+
+        if ($tables === []) {
+            // Every table skipped is a reviewed decision, not a dump waiting
+            // for the right argument, so there is nothing to offer or accept.
+            $this->error("No table on connection [{$config->connection}] is configured for dumping.");
+
+            return null;
+        }
+
         $named = $this->argument('table');
 
         if (is_string($named) && $named !== '') {

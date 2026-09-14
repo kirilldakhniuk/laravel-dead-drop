@@ -12,6 +12,11 @@ use InvalidArgumentException;
 final readonly class Root
 {
     /**
+     * How many ids `describe()` names before it starts counting.
+     */
+    private const int DESCRIBED_IDS = 3;
+
+    /**
      * @param  list<int|string>  $ids
      */
     public function __construct(
@@ -30,10 +35,16 @@ final readonly class Root
 
     /**
      * The same row set the way an operator would say it: `users #1, #2 (mysql)`.
+     * A root of two hundred ids is a listing column, not a recital, so only
+     * the first few are named and the rest are counted.
      */
     public function describe(): string
     {
-        return $this->table.' #'.implode(', #', $this->ids)." ({$this->connection})";
+        $shown = array_slice($this->ids, 0, self::DESCRIBED_IDS);
+        $rest = count($this->ids) - count($shown);
+        $ids = '#'.implode(', #', $shown).($rest > 0 ? " … (+{$rest})" : '');
+
+        return "{$this->table} {$ids} ({$this->connection})";
     }
 
     public static function parse(string $spec): self

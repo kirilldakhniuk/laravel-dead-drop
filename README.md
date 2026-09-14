@@ -214,7 +214,7 @@ php artisan dead-drop:dump companies 1 2 --connection=mysql --dry-run
 - `--disk=` — disk to write the artifact to. Defaults to `dead-drop.disk` (`DEAD_DROP_DISK`, default `s3`).
 - `--dry-run` — plan only; extract nothing.
 
-Run in an interactive terminal, anything you leave out is asked for: which connection (only when several are configured and the default connection has no config), which table (the connection's `data` and `lookup` tables, most-referenced first, as a list or — past fifteen tables — a search box), which ids, and finally whether to plan or extract. Anything you did pass is never asked for, and a run that named its table and ids in full is never asked about the mode either: it dumps unless `--dry-run` says otherwise.
+Run in an interactive terminal, anything you leave out is asked for: which connection (only when several are configured and the default connection has no config), which table (the connection's `data` and `lookup` tables, most-referenced first, as a list or — past fifteen tables — a search box), which ids, and finally whether to plan or extract. Anything you did pass is never asked for, and a run that named its root in full — connection, table and ids — is never asked about the mode either: it dumps unless `--dry-run` says otherwise.
 
 Non-interactively — `--no-interaction`, or anywhere without a terminal — nothing is ever prompted for. A missing piece fails with the argument to pass instead: `Pass a table argument, e.g. dead-drop:dump users 1 --connection=mysql.`, `Pass one or more ids, e.g. dead-drop:dump users 1 --connection=mysql.`, or `Pass --connection=<name>; configured connections: analytics, mysql.`
 

@@ -12,6 +12,13 @@ beforeEach(function () {
     SchemaBuilder::seedTwoCompanies('dd_test');
 });
 
+it('renders a root as the spec it was parsed from and as a readable description', function () {
+    expect(Root::parse('dd_test.companies:1,2')->spec())->toBe('dd_test.companies:1,2')
+        ->and(Root::parse('dd_test.companies:1,2')->describe())->toBe('companies #1, #2 (dd_test)')
+        // A long root is counted rather than recited, so it still fits a column.
+        ->and((new Root('mysql', 'users', range(1, 200)))->describe())->toBe('users #1, #2, #3 … (+197) (mysql)');
+});
+
 it('parses a root spec', function () {
     $root = Root::parse('dd_test.companies:1,2');
 

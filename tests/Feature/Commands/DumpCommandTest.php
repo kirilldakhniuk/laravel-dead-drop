@@ -189,3 +189,18 @@ it('refuses an unknown connection', function () {
         ->expectsOutputToContain('Unknown database connection [nope].')
         ->assertFailed();
 });
+
+it('refuses a connection whose every table is skipped', function () {
+    $path = initFixtureConfig();
+    $file = $path.'/dd_test.php';
+
+    file_put_contents($file, str_replace(
+        ["'class' => 'data'", "'class' => 'lookup'"],
+        "'class' => 'skip'",
+        (string) file_get_contents($file),
+    ));
+
+    $this->artisan('dead-drop:dump', ['--connection' => 'dd_test', '--path' => $path, '--no-interaction' => true])
+        ->expectsOutputToContain('No table on connection [dd_test] is configured for dumping.')
+        ->assertFailed();
+});

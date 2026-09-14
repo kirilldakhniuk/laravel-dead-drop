@@ -88,8 +88,10 @@ final readonly class Root
 
     public static function parse(string $spec): self
     {
-        if (str_ends_with($spec, ':'.self::ALL)) {
-            $connection = trim(substr($spec, 0, -2));
+        // Only a bare connection can be dumped whole: `mysql.users:*` names a
+        // table and is a typo, not every row of it.
+        if (preg_match('/^([^.:]+):'.preg_quote(self::ALL, '/').'$/', $spec, $matches) === 1) {
+            $connection = trim($matches[1]);
 
             return $connection === '' ? throw self::invalid($spec) : self::full($connection);
         }
@@ -110,7 +112,10 @@ final readonly class Root
 
         $table = trim(substr($rest, 0, $colon));
 
-        if ($connection === '' || $table === '') {
+        // `*` is reserved for the whole-database form, which is the only place
+        // it means anything: a table or an id spelled `*` is a mistyped spec,
+        // and `dd_test.*:1` must not read back as a whole-database root.
+        if ($connection === '' || $table === '' || $table === self::ALL) {
             throw self::invalid($spec);
         }
 
@@ -119,7 +124,7 @@ final readonly class Root
         foreach (explode(',', substr($rest, $colon + 1)) as $id) {
             $id = trim($id);
 
-            if ($id === '') {
+            if ($id === '' || $id === self::ALL) {
                 throw self::invalid($spec);
             }
 

@@ -187,4 +187,9 @@ it('names a whole database root as a spec and back', function () {
         ->and(Root::full(null)->describe())->toBe('whole database (all connections)')
         ->and(Root::full(null)->scope())->toBeNull()
         ->and(Root::parse('dd_test.companies:1')->isFull())->toBeFalse();
+
+    // `*` names a whole connection and nothing else: neither of these reads
+    // back as a whole-database root.
+    expect(fn () => Root::parse('dd_test.companies:*'))->toThrow(InvalidArgumentException::class)
+        ->and(fn () => Root::parse('dd_test.*:1'))->toThrow(InvalidArgumentException::class);
 });

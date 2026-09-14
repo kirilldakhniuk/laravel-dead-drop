@@ -65,7 +65,7 @@ trait ResolvesDumpRoot
         // The whole-database choice is offered where a root table would be,
         // and answers the question by saying there is no root row.
         if ($table === Root::ALL) {
-            return Root::full($connection);
+            return $this->wholeDatabase($config, $connection);
         }
 
         $ids = $this->rootIds($connection, $table);
@@ -91,7 +91,23 @@ trait ResolvesDumpRoot
 
         $connection = $this->rootConnection($config, everyConnection: true);
 
-        if ($connection === null) {
+        return $connection === null ? null : $this->wholeDatabase($config, $connection);
+    }
+
+    /**
+     * A whole-database root, or the reason there cannot be one. Every table is
+     * taken whole, so a `window` narrows nothing: honouring `--since` would
+     * shrink the windowed tables while their children came along whole, and a
+     * dump that leaves rows pointing at nothing is the one thing this package
+     * will not write. Time-boxing a whole database needs its own traversal.
+     */
+    private function wholeDatabase(ConfigSet $config, string $connection): ?Root
+    {
+        $since = $this->option('since');
+
+        if (is_string($since) && $since !== '') {
+            $this->error('--all cannot be combined with --since yet; a whole-database dump takes every table whole.');
+
             return null;
         }
 
@@ -146,8 +162,7 @@ trait ResolvesDumpRoot
      * The connection the root row lives on. Every configured connection is
      * loaded either way — a cross-connection reference needs them — so this
      * only names where the traversal starts.
-     */
-    /**
+     *
      * @param  bool  $everyConnection  whether covering all of them is an answer (`--all`) rather than a missing argument
      */
     private function rootConnection(ConfigSet $config, bool $everyConnection = false): ?string
@@ -325,9 +340,10 @@ trait ResolvesDumpRoot
             return $options;
         }
 
+        // A table named `2024` is an integer key by the time it gets here.
         return array_filter(
             $options,
-            fn (string $table): bool => $table === Root::ALL || str_contains(strtolower($table), strtolower($value)),
+            fn (int|string $key): bool => $key === Root::ALL || str_contains(strtolower((string) $key), strtolower($value)),
             ARRAY_FILTER_USE_KEY,
         );
     }

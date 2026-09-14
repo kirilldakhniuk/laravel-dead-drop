@@ -54,8 +54,7 @@ php artisan dead-drop:init            # discover the schema, write config/dead-d
 php artisan dead-drop:check           # fail-closed drift + redaction gate (use it in CI)
 php artisan dead-drop:dump            # interactive: pick connection, table, ids, plan or dump
 php artisan dead-drop:dump users 1 --dry-run
-php artisan dead-drop:dump --all                     # every data and lookup table, whole
-php artisan dead-drop:dump --all --since=2026-01-01  # …with windowed tables narrowed
+php artisan dead-drop:dump --all      # every data and lookup table, whole
 php artisan dead-drop:pull --connection=local_copy
 ```
 
@@ -213,7 +212,7 @@ php artisan dead-drop:dump --all --connection=mysql
 - `ids` — one or more root row ids, as separate arguments (`companies 1 2`) or one comma-separated argument (`companies 1,2`).
 - `--connection=` — the connection holding the root table. Every connection in the config directory is still loaded, because a cross-connection reference needs them; this only says where the traversal starts. Left out, the command uses the only configured connection, or your default connection when that one has a config, and says which it picked (`Using connection [mysql].`).
 - `--since=` — only take rows on or after this date for tables with a `window` column, for a narrower plan.
-- `--all` — dump every `data` and `lookup` table whole instead of a slice. See below.
+- `--all` — dump every `data` and `lookup` table whole instead of a slice; it cannot be combined with a table, ids or `--since`. See below.
 - `--path=` — config directory. Defaults to `config_path(config('dead-drop.config_path'))`.
 - `--disk=` — disk to write the artifact to. Defaults to `dead-drop.disk` (`DEAD_DROP_DISK`, default `s3`).
 - `--dry-run` — plan only; extract nothing.
@@ -228,14 +227,13 @@ Non-interactively — `--no-interaction`, or anywhere without a terminal — not
 
 ```bash
 php artisan dead-drop:dump --all --connection=mysql
-php artisan dead-drop:dump --all --since=2026-01-01
 ```
 
 - The scope is every table the connection's config classes as `data` or `lookup`, is not marked `removed`, and the live schema still has. `skip` tables are left out, as are tables with no rows.
+- Every one of them is taken **whole**. `window`, `exclude` and `--since` all scope a traversal, and a whole-database dump does none: they are not applied. `--all --since=` is refused outright — `--all cannot be combined with --since yet; a whole-database dump takes every table whole.` — because narrowing the windowed tables while their children came along whole would leave rows pointing at nothing. Time-boxing a whole database needs a cascading traversal of its own and is a planned follow-up.
+- Because every row of every dumped table is taken, the result is referentially complete by construction: nothing is traversed and the plan never has unresolved references to report.
 - `--all` takes no `table` and no `ids`: passing either fails with `--all cannot be combined with a table or ids.`
-- `--connection=` limits the dump to one connection. Without it the usual rule applies — the only configured connection, or your default connection when that one has a config — and where neither applies and nothing can be asked, every configured connection is dumped.
-- Nothing is traversed, because taking all the rows is referentially complete by construction: the plan never has unresolved references to report.
-- `--since=` narrows the tables that declare a `window` to the rows on or after that date; a table without a `window` is always taken whole.
+- `--connection=` limits the dump to one connection. Without it the usual rule applies — the only configured connection, or your default connection when that one has a config — and where neither applies and nothing can be asked, every configured connection is dumped. A connection whose every table is `skip` is named (`No dumpable tables on connection [x]; skipped.`) and left out rather than failing the run. Note that `dead-drop:pull` refuses an artifact that carries the same bare table name from two connections, so a multi-connection `--all` of schemas that share table names has to be pulled per connection.
 - Everything else is unchanged: the fail-closed extraction gate still runs before a single row moves (there is no root row, so only the root-id check does not apply), every row is still redacted by the same rules, and a table with a composite primary key — or none at all — still fails the plan.
 
 Run in an interactive terminal, the same thing is the first table choice on offer: `Whole database (every data and lookup table)`.

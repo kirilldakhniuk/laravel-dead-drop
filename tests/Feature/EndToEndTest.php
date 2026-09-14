@@ -76,6 +76,11 @@ it('round trips a whole database dump into the target', function () {
         expect($target->table($table)->count())->toBe($source->table($table)->count());
     }
 
+    // Every table is taken whole, so nothing can be left dangling.
+    foreach ($target->table('order_items')->get() as $item) {
+        expect($target->table('orders')->where('id', $item->order_id)->exists())->toBeTrue();
+    }
+
     // A whole-database dump is still a redacted one, and still leaves the
     // tables nobody dumps alone.
     expect($target->table('users')->where('id', 10)->value('email'))->toMatch('/^[0-9a-f]{16}@example\.test$/')

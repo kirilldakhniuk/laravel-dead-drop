@@ -115,16 +115,15 @@ it('plans every data and lookup table whole with --all', function () {
         ->toContain('Unresolved references (0):');
 });
 
-it('narrows windowed tables with --all --since', function () {
+it('refuses --all together with --since', function () {
     $path = initFixtureConfig();
 
-    Artisan::call('dead-drop:dump', ['--all' => true, '--since' => '2026-06-01', '--connection' => 'dd_test', '--path' => $path, '--dry-run' => true]);
-    $output = Artisan::output();
-
-    // Only `orders` declares a window: one of its three rows is inside it,
-    // while a table without one is still taken whole.
-    expect($output)->toMatch('/orders\s*\|\s*1\s*\|/')
-        ->toMatch('/users\s*\|\s*3\s*\|/');
+    // Narrowing the windowed tables while their children came along whole
+    // would leave rows pointing at nothing, which is the one thing a dump
+    // must never write.
+    $this->artisan('dead-drop:dump', ['--all' => true, '--since' => '2026-06-01', '--connection' => 'dd_test', '--path' => $path, '--dry-run' => true])
+        ->expectsOutputToContain('--all cannot be combined with --since yet; a whole-database dump takes every table whole.')
+        ->assertFailed();
 });
 
 it('refuses --all together with a table or ids', function () {

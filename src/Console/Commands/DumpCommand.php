@@ -76,7 +76,7 @@ final class DumpCommand extends Command
         try {
             $schemas = $this->schemas($config, $introspector);
             $plan = $root->isFull()
-                ? $planner->planFull($config, $schemas, $since, $root->scope())
+                ? $planner->planFull($config, $schemas, $root->scope())
                 : $planner->plan($root, $config, $schemas, $since);
 
             // A dry run reads nothing out of the tables it plans, so only the

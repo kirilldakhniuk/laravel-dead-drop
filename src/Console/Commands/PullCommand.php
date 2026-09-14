@@ -7,6 +7,7 @@ namespace DeadDrop\DeadDrop\Console\Commands;
 use DeadDrop\DeadDrop\Artifacts\ArtifactReader;
 use DeadDrop\DeadDrop\Artifacts\Manifest;
 use DeadDrop\DeadDrop\Console\Commands\Concerns\ResolvesArtifactLocation;
+use DeadDrop\DeadDrop\Console\Commands\Concerns\ResolvesPullTarget;
 use DeadDrop\DeadDrop\Loading\PullReport;
 use DeadDrop\DeadDrop\Loading\PullRunner;
 use Illuminate\Console\Command;
@@ -30,9 +31,10 @@ use function Laravel\Prompts\confirm;
 final class PullCommand extends Command
 {
     use ResolvesArtifactLocation;
+    use ResolvesPullTarget;
 
     /** @var string */
-    protected $signature = 'dead-drop:pull {id? : Artifact id (defaults to the newest complete one)} {--connection= : Target connection (defaults to the default connection)} {--disk= : Disk holding artifacts} {--path= : Path on the disk} {--force : Skip the confirmation}';
+    protected $signature = 'dead-drop:pull {id? : Artifact id (prompted when omitted)} {--connection= : Target connection (prompted when omitted; must not be a source of the artifact)} {--disk= : Disk holding artifacts (defaults to dead-drop.disk)} {--path= : Path on the disk (defaults to dead-drop.path)} {--force : Skip the confirmation}';
 
     /** @var string */
     protected $description = 'Load a dump artifact into a local or staging database';
@@ -57,7 +59,7 @@ final class PullCommand extends Command
         $reader = new ArtifactReader(Storage::disk($disk), $path);
 
         try {
-            $manifest = $this->manifest($reader, $disk, $path);
+            $manifest = $this->resolveManifest($reader, $disk, $path);
         } catch (InvalidArgumentException $e) {
             $this->error($e->getMessage());
 
@@ -68,21 +70,9 @@ final class PullCommand extends Command
             return self::FAILURE;
         }
 
-        $target = $this->target();
+        $target = $this->resolveTarget($manifest);
 
-        if (! in_array($target, array_keys((array) config('database.connections')), true)) {
-            $this->error("Unknown database connection [{$target}].");
-
-            return self::FAILURE;
-        }
-
-        // Loading a slice back into the database it was taken from would
-        // replace whole tables with the part of themselves the dump carried,
-        // and no environment guard can catch that — the source connection is
-        // named in the artifact, so the refusal reads it from there.
-        if (array_key_exists($target, $manifest->connections)) {
-            $this->error("Refusing to load into [{$target}]: it is a source connection of this artifact.");
-
+        if ($target === null) {
             return self::FAILURE;
         }
 
@@ -125,36 +115,6 @@ final class PullCommand extends Command
         }
     }
 
-    /**
-     * The artifact to load, or `null` once the reason there is none has been
-     * printed.
-     *
-     * @throws InvalidArgumentException when a named artifact is not on the disk
-     */
-    private function manifest(ArtifactReader $reader, string $disk, string $path): ?Manifest
-    {
-        $id = $this->argument('id');
-        $manifest = is_string($id) && $id !== ''
-            ? $reader->manifest($id)
-            : $reader->latestComplete();
-
-        if ($manifest === null) {
-            $this->error("No complete artifact found on {$disk}:{$path}.");
-
-            return null;
-        }
-
-        // An artifact still marked `writing` is a dump that died halfway, so
-        // loading it would replace whole tables with part of a slice.
-        if (! $manifest->isComplete()) {
-            $this->error("Artifact [{$manifest->id}] is incomplete (status: {$manifest->status}) and cannot be loaded.");
-
-            return null;
-        }
-
-        return $manifest;
-    }
-
     private function confirmed(Manifest $manifest, string $target): bool
     {
         if ($this->option('force') === true || ! $this->input->isInteractive()) {
@@ -164,7 +124,7 @@ final class PullCommand extends Command
         $tables = count($manifest->tables);
 
         return confirm(
-            label: "Replace {$tables} tables on connection [{$target}] with artifact [{$manifest->id}]?",
+            label: "Replace {$tables} tables on connection [{$target}] ({$this->describeConnection($target)}) with artifact [{$manifest->id}]?",
             default: false,
         );
     }
@@ -227,12 +187,5 @@ final class PullCommand extends Command
         $hook($report);
 
         return 0;
-    }
-
-    private function target(): string
-    {
-        $connection = $this->option('connection');
-
-        return is_string($connection) && $connection !== '' ? $connection : (string) config('database.default');
     }
 }

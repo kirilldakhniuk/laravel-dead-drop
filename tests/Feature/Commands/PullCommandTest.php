@@ -5,6 +5,7 @@ declare(strict_types=1);
 use DeadDrop\DeadDrop\Artifacts\ArtifactReader;
 use DeadDrop\DeadDrop\Tests\Fixtures\RecordingAfterHook;
 use DeadDrop\DeadDrop\Tests\Fixtures\SchemaBuilder;
+use Illuminate\Support\Arr;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
 
@@ -42,7 +43,7 @@ it('asks for confirmation and aborts on no', function () {
     $count = count((new ArtifactReader(Storage::disk('local'), 'dead-drops'))->manifest($id)->tables);
 
     $this->artisan('dead-drop:pull', ['--connection' => 'dd_target', '--disk' => 'local'])
-        ->expectsConfirmation("Replace {$count} tables on connection [dd_target] with artifact [{$id}]?", 'no')
+        ->expectsConfirmation("Replace {$count} tables on connection [dd_target] (sqlite: :memory:) with artifact [{$id}]?", 'no')
         ->expectsOutputToContain('Aborted.')
         ->assertSuccessful();
 
@@ -51,7 +52,7 @@ it('asks for confirmation and aborts on no', function () {
 
 it('refuses an incomplete artifact and reports when none exists', function () {
     $this->artisan('dead-drop:pull', ['--connection' => 'dd_target', '--disk' => 'local', '--force' => true])
-        ->expectsOutputToContain('No complete artifact found on local:dead-drops.')
+        ->expectsOutputToContain('No complete artifact found on local:dead-drops. Run dead-drop:dump first.')
         ->assertFailed();
 
     $id = dumpFixture('dd_test.companies:1', initFixtureConfig());
@@ -126,5 +127,96 @@ it('refuses an unknown target connection', function () {
 
     $this->artisan('dead-drop:pull', ['--connection' => 'nope', '--disk' => 'local', '--force' => true])
         ->expectsOutputToContain('Unknown database connection [nope]')
+        ->assertFailed();
+});
+
+it('prompts for the artifact and the target connection when run bare', function () {
+    $path = initFixtureConfig();
+    dumpFixture('dd_test.companies:1', $path);
+    dumpFixture('dd_test.companies:2', $path);
+
+    // Only the fixture connections are offered, so the choice list is the
+    // candidate rule itself rather than whatever Testbench ships.
+    config()->set('database.connections', Arr::only((array) config('database.connections'), ['dd_test', 'dd_analytics', 'dd_target']));
+
+    $reader = new ArtifactReader(Storage::disk('local'), 'dead-drops');
+    $ids = $reader->ids();
+    $newest = $reader->manifest($ids[0]);
+
+    $this->artisan('dead-drop:pull', ['--disk' => 'local'])
+        ->expectsChoice('Which artifact should be loaded?', $ids[0], [
+            $ids[0] => artifactLabel($newest),
+            $ids[1] => artifactLabel($reader->manifest($ids[1])),
+        ], true)
+        ->expectsChoice('Which connection should receive the data?', 'dd_target', [
+            'dd_analytics' => 'dd_analytics (sqlite: :memory:)',
+            'dd_target' => 'dd_target (sqlite: :memory:)',
+        ], true)
+        ->expectsConfirmation(
+            'Replace '.count($newest->tables)." tables on connection [dd_target] (sqlite: :memory:) with artifact [{$ids[0]}]?",
+            'yes',
+        )
+        ->expectsOutputToContain('Loaded')
+        ->assertSuccessful();
+
+    $companies = 0;
+
+    foreach ($newest->tables as $table) {
+        if ($table->table === 'companies') {
+            $companies = $table->rows;
+        }
+    }
+
+    expect(DB::connection('dd_target')->table('companies')->count())->toBe($companies);
+});
+
+it('does not offer incomplete artifacts and says so', function () {
+    $path = initFixtureConfig();
+    dumpFixture('dd_test.companies:1', $path);
+    dumpFixture('dd_test.companies:2', $path);
+    dumpFixture('dd_test.companies:1', $path);
+
+    $reader = new ArtifactReader(Storage::disk('local'), 'dead-drops');
+    [$newest, $writing, $oldest] = $reader->ids();
+    $manifest = 'dead-drops/'.$writing.'/manifest.json';
+    Storage::disk('local')->put($manifest, str_replace('"complete"', '"writing"', (string) Storage::disk('local')->get($manifest)));
+
+    $this->artisan('dead-drop:pull', ['--connection' => 'dd_target', '--disk' => 'local', '--force' => true])
+        ->expectsOutputToContain('1 incomplete artifact(s) not offered.')
+        ->expectsChoice('Which artifact should be loaded?', $newest, [
+            $newest => artifactLabel($reader->manifest($newest)),
+            $oldest => artifactLabel($reader->manifest($oldest)),
+        ], true)
+        ->expectsOutputToContain('Loaded')
+        ->assertSuccessful();
+});
+
+it('explains how to add a target when every connection is a source', function () {
+    dumpFixture('dd_test.companies:1', initFixtureConfig());
+    config()->set('database.connections', ['dd_test' => config('database.connections.dd_test')]);
+
+    $this->artisan('dead-drop:pull', ['--disk' => 'local', '--force' => true])
+        ->expectsOutputToContain('nowhere safe to load it')
+        ->expectsOutputToContain("'local_copy' =>")
+        ->expectsOutputToContain('--connection=local_copy')
+        ->assertFailed();
+});
+
+it('lists candidates when the default connection is a source in non-interactive mode', function () {
+    dumpFixture('dd_test.companies:1', initFixtureConfig());
+    config()->set('database.default', 'dd_test');
+    config()->set('database.connections', Arr::only((array) config('database.connections'), ['dd_test', 'dd_analytics', 'dd_target']));
+
+    $this->artisan('dead-drop:pull', ['--disk' => 'local', '--no-interaction' => true, '--force' => true])
+        ->expectsOutputToContain('The default connection [dd_test] is a source of this artifact; pass --connection=<name>. Candidates: dd_analytics, dd_target.')
+        ->assertFailed();
+});
+
+it('appends candidates to the source-connection refusal', function () {
+    dumpFixture('dd_test.companies:1', initFixtureConfig());
+    config()->set('database.connections', Arr::only((array) config('database.connections'), ['dd_test', 'dd_analytics', 'dd_target']));
+
+    $this->artisan('dead-drop:pull', ['--connection' => 'dd_test', '--disk' => 'local', '--force' => true])
+        ->expectsOutputToContain('Refusing to load into [dd_test]: it is a source connection of this artifact. Target one of: dd_analytics, dd_target.')
         ->assertFailed();
 });

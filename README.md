@@ -55,10 +55,10 @@ php artisan dead-drop:check           # fail-closed drift + redaction gate (use 
 php artisan dead-drop:dump            # interactive: pick connection, table, ids, plan or dump
 php artisan dead-drop:dump users 1 --dry-run
 php artisan dead-drop:dump --all      # every data and lookup table, whole
-php artisan dead-drop:pull --connection=local_copy
+php artisan dead-drop:pull            # interactive: pick the artifact and a target connection
 ```
 
-A real dump works with no configuration at all — see Redaction below for how the salt and disk default. `dead-drop:dump` prompts for anything you do not pass it — the connection, the root table, its ids, and whether to plan or extract — and asks for nothing at all when it is run non-interactively.
+A real dump works with no configuration at all — see Redaction below for how the salt and disk default. `dead-drop:dump` prompts for anything you do not pass it — the connection, the root table, its ids, and whether to plan or extract — and `dead-drop:pull` does the same for the artifact and the connection to load it into; both ask for nothing at all when they are run non-interactively.
 
 ## Usage
 
@@ -321,19 +321,38 @@ It prints id, created, root, status, table count, total rows and total size, new
 `dead-drop:pull` loads a dump artifact into a target connection, replacing the tables the artifact names and leaving every other table untouched:
 
 ```bash
-php artisan dead-drop:pull [id] --connection=target
+php artisan dead-drop:pull                              # interactive: pick the artifact and a target connection
+php artisan dead-drop:pull [id] --connection=local_copy --force
 ```
 
-- `id` (optional argument) — the artifact to load. Defaults to the newest artifact with `status: "complete"`.
-- `--connection=` — the target connection. Defaults to `database.default`.
+- `id` (optional argument) — the artifact to load. Run bare in an interactive terminal, it asks which artifact to load, newest first, each one labelled with its root, the time it was taken and how much it holds; an artifact that is not `status: "complete"` is never offered, and the count of those left out is printed above the list. A disk holding exactly one complete artifact is not a question: it is named and used. Run non-interactively, it takes the newest complete artifact as before.
+- `--connection=` — the target connection, which must not be one of the artifact's own source connections. Interactively you are asked which of the remaining connections should receive the data, each shown with the driver and database it points at; non-interactively it uses `database.default` when that is not a source, and otherwise names the connections you can pass.
 - `--disk=` / `--path=` — where to read the artifact from. Default to `dead-drop.disk` / `dead-drop.path`.
 - `--force` — skip the confirmation prompt.
 
 It refuses to run unless `app()->environment()` matches one of `pull.allow_environments` (default `['local', 'staging']`) — everywhere else it prints `dead-drop:pull refuses to run in the [{environment}] environment; allowed: {comma-separated list, or "none"}` and exits 1. This is checked before the disk is even touched, because a pull is a destructive write and the one place it must never happen is the database the artifact came from.
 
-It also refuses when no complete artifact is found (`No complete artifact found on {disk}:{path}.`), when a named artifact is not `status: "complete"` (`Artifact [{id}] is incomplete (status: {status}) and cannot be loaded.`), when its manifest cannot be parsed (`Artifact [{id}] has a corrupt manifest.`), and when the target connection is not one of `database.connections` (`Unknown database connection [{connection}].`).
+It also refuses when no complete artifact is found (`No complete artifact found on {disk}:{path}. Run dead-drop:dump first.`), when a named artifact is not `status: "complete"` (`Artifact [{id}] is incomplete (status: {status}) and cannot be loaded.`), when its manifest cannot be parsed (`Artifact [{id}] has a corrupt manifest.`), and when the target connection is not one of `database.connections` (`Unknown database connection [{connection}].`).
 
-It refuses the target itself when the artifact was dumped from it — `Refusing to load into [{target}]: it is a source connection of this artifact.`, with no override — because replacing a table with the slice of itself the dump carried is exactly the loss the environment guard exists to prevent. The match is by connection *name* against the keys of the manifest's `connections`, not by host or database: a local app whose connection is also called `mysql` cannot pull an artifact dumped from a connection called `mysql`, and has to name its target connection something else.
+It refuses the target itself when the artifact was dumped from it — `Refusing to load into [{target}]: it is a source connection of this artifact. Target one of: {candidates}.`, with no override — because replacing a table with the slice of itself the dump carried is exactly the loss the environment guard exists to prevent. The match is by connection *name* against the keys of the manifest's `connections`, not by host or database: a local app whose connection is also called `mysql` cannot pull an artifact dumped from a connection called `mysql`, and has to name its target connection something else.
+
+A single-connection app has nowhere safe to load an artifact it dumped from that connection, so the command says how to make somewhere rather than refusing and stopping:
+
+```
+Every configured connection ([sqlite]) is a source of this artifact, so there is nowhere safe to load it.
+Add a target connection to config/database.php, for example:
+
+    'local_copy' => [
+        'driver' => 'sqlite',
+        'database' => database_path('local_copy.sqlite'),
+        'prefix' => '',
+        'foreign_key_constraints' => true,
+    ],
+
+then create its schema (php artisan migrate --database=local_copy) and run: php artisan dead-drop:pull --connection=local_copy
+```
+
+The example is written in the driver of the artifact's first source connection — a SQLite file next to the app, or a second database on the same server with its credentials read from the environment. Dead Drop does not create the schema: the target has to be migrated first, and a table the artifact names but the target does not have is skipped rather than created.
 
 The shape of the target is checked against the whole manifest before a single row moves, so a target that cannot hold the slice is refused intact rather than left half replaced:
 

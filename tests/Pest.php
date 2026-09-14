@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 use DeadDrop\DeadDrop\Artifacts\ArtifactReader;
+use DeadDrop\DeadDrop\Artifacts\Manifest;
 use DeadDrop\DeadDrop\Config\ConfigLoader;
 use DeadDrop\DeadDrop\Planning\Root;
 use DeadDrop\DeadDrop\Planning\TraversalResult;
@@ -49,6 +50,16 @@ function initFixtureConfig(): string
 function latestArtifactId(): string
 {
     return (new ArtifactReader(Storage::disk('local'), 'dead-drops'))->ids()[0];
+}
+
+/**
+ * An artifact the way `dead-drop:pull` offers it in its choice list.
+ */
+function artifactLabel(Manifest $manifest): string
+{
+    return Root::parse($manifest->root)->describe()
+        .' · '.(new DateTimeImmutable($manifest->createdAt))->format('Y-m-d H:i')
+        .' · '.$manifest->totalRows().' rows · '.count($manifest->tables).' tables';
 }
 
 /**

@@ -1,13 +1,13 @@
 {
     "$schema": "https://getcomposer.org/schema.json",
-    "name": "kirilldakhniuk/dead-drop",
+    "name": "kirilldakhniuk/laravel-dead-drop",
     "description": "Plan and dump redacted, referentially-complete slices of production data for local and staging databases.",
     "keywords": [
         "laravel",
         "kirilldakhniuk",
         "dead-drop"
     ],
-    "homepage": "https://github.com/kirilldakhniuk/dead-drop",
+    "homepage": "https://github.com/kirilldakhniuk/laravel-dead-drop",
     "license": "MIT",
     "authors": [
         {

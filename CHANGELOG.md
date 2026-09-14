@@ -1,7 +1,8 @@
 # Release Notes
 
-## [Unreleased](https://github.com/kirilldakhniuk/dead-drop/compare/v0.1.0...1.x)
+## [Unreleased](https://github.com/kirilldakhniuk/laravel-dead-drop/compare/v0.1.0...1.x)
 
+- Renamed the package to `kirilldakhniuk/laravel-dead-drop`; the PHP namespace, config key, commands and publish tags are unchanged.
 - Added `dead-drop:init` to introspect one or more database connections, infer their relationships (foreign keys, Eloquent `belongsTo` relations, and column-naming guesses), classify and scan their tables, and write a reviewed, human-editable `<connection>.php` config file per connection — merging a re-run into the existing file so a human's decisions are never discarded and a vanished table is marked `removed` rather than deleted.
 - Added the per-connection config format: `class` (`data`/`lookup`/`skip`), `removed`, `window`, `exclude`, `morph`, `columns`, `references` (with `descend` and a `source` of `fk`/`eloquent`/`guessed`/`manual`), and `redact` (with `hash`/`mask`/`null`/`scramble`/`bcrypt:secret`/`fixed:redacted` suggestions and a `review` placeholder for columns that need a human decision).
 - Added `dead-drop:check` to detect drift between a connection's live schema and its reviewed config — new or removed tables and columns, and sensitive columns with no redaction decision — for use as a non-interactive CI gate.
@@ -11,6 +12,6 @@
 - Added `dead-drop:pull` to load an artifact into a target connection: replaces each named table inside its own transaction (delete, insert, verify the row count) with foreign-key checks off for the run, refuses outside `pull.allow_environments`, on an incomplete artifact, on a target missing a column, or when the artifact holds the same bare table name from two connections, skips and names tables absent from the target, asks for confirmation unless `--force`, and runs `pull.after` hooks (class-string or Artisan command) after printing the summary.
 - `--full` dumps, native executors (`mysqldump`, `mysqlsh`, `psql`) and composite primary keys are not implemented yet.
 
-## [v0.1.0](https://github.com/kirilldakhniuk/dead-drop/compare/...v0.1.0) - 202x-xx-xx
+## [v0.1.0](https://github.com/kirilldakhniuk/laravel-dead-drop/compare/...v0.1.0) - 202x-xx-xx
 
 Initial pre-release.

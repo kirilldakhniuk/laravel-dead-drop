@@ -8,6 +8,7 @@ use DeadDrop\DeadDrop\Planning\Root;
 use DeadDrop\DeadDrop\Schema\Introspector;
 use DeadDrop\DeadDrop\Schema\SchemaSet;
 use DeadDrop\DeadDrop\Tests\Fixtures\SchemaBuilder;
+use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Facades\Storage;
 
@@ -93,4 +94,77 @@ it('refuses a dry run whose root id does not exist', function () {
     $this->artisan('dead-drop:dump', ['table' => 'companies', 'ids' => ['999'], '--connection' => 'dd_test', '--path' => $path, '--dry-run' => true])
         ->expectsOutputToContain('Root id 999 does not exist in dd_test.companies')
         ->assertFailed();
+});
+
+it('plans every data and lookup table whole with --all', function () {
+    $path = initFixtureConfig();
+
+    // The plan table and the row counts share one line each, so the rendered
+    // output is asserted directly rather than through output expectations.
+    Artisan::call('dead-drop:dump', ['--all' => true, '--connection' => 'dd_test', '--path' => $path, '--dry-run' => true]);
+    $output = Artisan::output();
+
+    expect($output)->toMatch('/companies\s*\|\s*2\s*\|/')
+        ->toMatch('/users\s*\|\s*3\s*\|/')
+        ->toMatch('/orders\s*\|\s*3\s*\|/')
+        ->toMatch('/countries\s*\|\s*2\s*\|/')
+        // Skipped tables are not dumpable, and an empty table has nothing to write.
+        ->not->toContain('failed_jobs')
+        ->not->toContain('comments')
+        // Every row of every table is taken, so nothing can be left dangling.
+        ->toContain('Unresolved references (0):');
+});
+
+it('narrows windowed tables with --all --since', function () {
+    $path = initFixtureConfig();
+
+    Artisan::call('dead-drop:dump', ['--all' => true, '--since' => '2026-06-01', '--connection' => 'dd_test', '--path' => $path, '--dry-run' => true]);
+    $output = Artisan::output();
+
+    // Only `orders` declares a window: one of its three rows is inside it,
+    // while a table without one is still taken whole.
+    expect($output)->toMatch('/orders\s*\|\s*1\s*\|/')
+        ->toMatch('/users\s*\|\s*3\s*\|/');
+});
+
+it('refuses --all together with a table or ids', function () {
+    $path = initFixtureConfig();
+
+    $this->artisan('dead-drop:dump', ['table' => 'companies', 'ids' => ['1'], '--all' => true, '--connection' => 'dd_test', '--path' => $path, '--dry-run' => true])
+        ->expectsOutputToContain('--all cannot be combined with a table or ids.')
+        ->assertFailed();
+});
+
+it('names a connection with nothing to dump and plans the rest', function () {
+    $path = initFixtureConfig();
+    $file = $path.'/dd_test.php';
+
+    file_put_contents($file, str_replace(
+        ["'class' => 'data'", "'class' => 'lookup'"],
+        "'class' => 'skip'",
+        (string) file_get_contents($file),
+    ));
+
+    // Every table skipped is a reviewed decision, not a reason to fail a run
+    // that asked for whatever there is.
+    $this->artisan('dead-drop:dump', ['--all' => true, '--connection' => 'dd_test', '--path' => $path, '--dry-run' => true, '--no-interaction' => true])
+        ->expectsOutputToContain('No dumpable tables on connection [dd_test]; skipped.')
+        ->assertSuccessful();
+});
+
+it('covers every configured connection when --all can name none', function () {
+    SchemaBuilder::migrate('dd_analytics');
+    SchemaBuilder::seedTwoCompanies('dd_analytics');
+    $path = tempDirectory();
+    $this->artisan('dead-drop:init', ['--connection' => ['dd_test', 'dd_analytics'], '--path' => $path, '--no-interaction' => true])->assertSuccessful();
+    config()->set('database.default', 'sqlite');
+
+    // Nothing names a connection, none of them is the default, and there is
+    // no terminal to ask: `--all` means all of them rather than a failure.
+    Artisan::call('dead-drop:dump', ['--all' => true, '--path' => $path, '--dry-run' => true, '--no-interaction' => true]);
+    $output = Artisan::output();
+
+    expect($output)->toContain('dd_analytics')
+        ->toContain('dd_test')
+        ->not->toContain('Pass --connection=');
 });

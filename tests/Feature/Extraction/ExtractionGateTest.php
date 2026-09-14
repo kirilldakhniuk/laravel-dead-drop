@@ -57,3 +57,16 @@ it('fails on an invalid redaction placement', function () {
 it('fails on a root id that does not exist', function () {
     expect(gateCheck(initFixtureConfig(), 'dd_test.companies:1,999'))->toBe(['Root id 999 does not exist in dd_test.companies']);
 });
+
+it('checks a whole database dump without looking for a root row', function () {
+    // There is no root row to verify, and `*` is not a table: a gate that
+    // still ran the root-id check would report it as having no primary key.
+    expect(gateCheck(initFixtureConfig(), 'dd_test:*'))->toBe([]);
+});
+
+it('still fails a whole database dump on drift', function () {
+    $path = initFixtureConfig();
+    Schema::connection('dd_test')->table('orders', fn ($t) => $t->string('reference')->nullable());
+
+    expect(gateCheck($path, 'dd_test:*'))->toContain('dd_test: New columns (not in config):');
+});

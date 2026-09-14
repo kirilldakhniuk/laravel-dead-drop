@@ -33,9 +33,10 @@ use InvalidArgumentException;
 use RuntimeException;
 
 /**
- * Dumps a root row set: it plans what the dump contains, puts that plan past
- * the extraction gate, and — unless `--dry-run` — hands it to the executor
- * that writes the redacted artifact.
+ * Dumps a root row set — or, with `--all`, every dumpable table whole: it
+ * plans what the dump contains, puts that plan past the extraction gate, and
+ * — unless `--dry-run` — hands it to the executor that writes the redacted
+ * artifact.
  *
  * The command composes the config, schema, planning and extraction layers and
  * prints what they answer; it decides nothing about the plan itself.
@@ -47,7 +48,7 @@ final class DumpCommand extends Command
     use ResolvesDumpRoot;
 
     /** @var string */
-    protected $signature = 'dead-drop:dump {table? : Root table} {ids?* : One or more root row ids} {--connection= : Connection holding the root table} {--since= : Only rows on or after this date for windowed tables} {--dry-run : Plan only, extract nothing} {--disk= : Disk to write the artifact to (defaults to dead-drop.disk)} {--path= : Config directory}';
+    protected $signature = 'dead-drop:dump {table? : Root table} {ids?* : One or more root row ids} {--connection= : Connection holding the root table} {--all : Dump every data and lookup table whole} {--since= : Only rows on or after this date for windowed tables} {--dry-run : Plan only, extract nothing} {--disk= : Disk to write the artifact to (defaults to dead-drop.disk)} {--path= : Config directory}';
 
     /** @var string */
     protected $description = 'Dump a redacted, referentially complete slice of a root row set';
@@ -74,7 +75,9 @@ final class DumpCommand extends Command
 
         try {
             $schemas = $this->schemas($config, $introspector);
-            $plan = $planner->plan($root, $config, $schemas, $since);
+            $plan = $root->isFull()
+                ? $planner->planFull($config, $schemas, $since, $root->scope())
+                : $planner->plan($root, $config, $schemas, $since);
 
             // A dry run reads nothing out of the tables it plans, so only the
             // root ids have to hold; an extraction has to clear the whole gate.

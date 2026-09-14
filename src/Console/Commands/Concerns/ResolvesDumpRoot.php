@@ -14,8 +14,8 @@ use function Laravel\Prompts\select;
 use function Laravel\Prompts\text;
 
 /**
- * Turns `dead-drop:dump`'s connection, table and id arguments into a `Root`,
- * asking for whatever the operator left out.
+ * Turns `dead-drop:dump`'s connection, table and id arguments — or its
+ * `--all` flag — into a `Root`, asking for whatever the operator left out.
  *
  * Two rules hold everywhere here: anything given on the command line is never
  * asked for, and nothing at all is asked for when the command is not
@@ -30,6 +30,11 @@ trait ResolvesDumpRoot
     private const int TABLE_CHOICE_LIMIT = 15;
 
     /**
+     * The label the whole-database choice is offered under.
+     */
+    private const string WHOLE_DATABASE = 'Whole database (every data and lookup table)';
+
+    /**
      * Whether any part of the root had to be asked for. A run that named its
      * root in full stays that way: it is never asked what to do with it.
      */
@@ -41,6 +46,10 @@ trait ResolvesDumpRoot
      */
     private function resolveRoot(ConfigSet $config): ?Root
     {
+        if ($this->option('all') === true) {
+            return $this->fullRoot($config);
+        }
+
         $connection = $this->rootConnection($config);
 
         if ($connection === null) {
@@ -53,9 +62,60 @@ trait ResolvesDumpRoot
             return null;
         }
 
+        // The whole-database choice is offered where a root table would be,
+        // and answers the question by saying there is no root row.
+        if ($table === Root::ALL) {
+            return Root::full($connection);
+        }
+
         $ids = $this->rootIds($connection, $table);
 
         return $ids === [] ? null : new Root($connection, $table, $ids);
+    }
+
+    /**
+     * The root of a `--all` run. Every row of every dumpable table is taken,
+     * so a table or an id would have nothing left to narrow: naming one is a
+     * mistake rather than a refinement.
+     */
+    private function fullRoot(ConfigSet $config): ?Root
+    {
+        $table = $this->argument('table');
+        $ids = $this->argument('ids');
+
+        if ((is_string($table) && $table !== '') || (is_array($ids) && $ids !== [])) {
+            $this->error('--all cannot be combined with a table or ids.');
+
+            return null;
+        }
+
+        $connection = $this->rootConnection($config, everyConnection: true);
+
+        if ($connection === null) {
+            return null;
+        }
+
+        $root = Root::full($connection);
+
+        $this->warnEmptyConnections($config, $root);
+
+        return $root;
+    }
+
+    /**
+     * A `--all` run is never asked which tables it covers, so a connection
+     * whose every table is skipped is a fact about that connection rather
+     * than a missing argument: it is named and left out.
+     */
+    private function warnEmptyConnections(ConfigSet $config, Root $root): void
+    {
+        $scope = $root->scope();
+
+        foreach ($config->connections as $connection => $connectionConfig) {
+            if (($scope === null || $scope === $connection) && $this->dumpableTables($connectionConfig) === []) {
+                $this->warn("No dumpable tables on connection [{$connection}]; skipped.");
+            }
+        }
     }
 
     /**
@@ -87,7 +147,10 @@ trait ResolvesDumpRoot
      * loaded either way — a cross-connection reference needs them — so this
      * only names where the traversal starts.
      */
-    private function rootConnection(ConfigSet $config): ?string
+    /**
+     * @param  bool  $everyConnection  whether covering all of them is an answer (`--all`) rather than a missing argument
+     */
+    private function rootConnection(ConfigSet $config, bool $everyConnection = false): ?string
     {
         $named = $this->option('connection');
 
@@ -114,6 +177,12 @@ trait ResolvesDumpRoot
         }
 
         if (! $this->input->isInteractive()) {
+            // `--all` means all: with nothing to ask and no connection to
+            // prefer, it covers every configured one rather than failing.
+            if ($everyConnection) {
+                return Root::ALL;
+            }
+
             $this->error('Pass --connection=<name>; configured connections: '.implode(', ', $configured).'.');
 
             return null;
@@ -189,15 +258,23 @@ trait ResolvesDumpRoot
         $this->askedForRoot = true;
         $label = 'Which table holds the root row?';
 
+        // The widest answer is offered first: an operator who wants everything
+        // should not have to know there is a flag for it.
+        $options = [Root::ALL => self::WHOLE_DATABASE];
+
+        foreach ($tables as $table) {
+            $options[$table] = $table;
+        }
+
         if (count($tables) <= self::TABLE_CHOICE_LIMIT) {
-            return (string) select(label: $label, options: $tables);
+            return (string) select(label: $label, options: $options);
         }
 
         // A real schema is hundreds of tables long, and scrolling one is
         // slower than typing three letters of the table's name.
         return (string) search(
             label: $label,
-            options: fn (string $value): array => $this->matching($tables, $value),
+            options: fn (string $value): array => $this->matching($options, $value),
         );
     }
 
@@ -236,16 +313,23 @@ trait ResolvesDumpRoot
     }
 
     /**
-     * @param  list<string>  $tables
+     * The offered tables whose name contains what has been typed so far. The
+     * whole-database choice is not a table name and always stays offered.
+     *
+     * @param  array<string, string>  $options  label keyed by table
      * @return array<string, string>
      */
-    private function matching(array $tables, string $value): array
+    private function matching(array $options, string $value): array
     {
-        $matches = $value === ''
-            ? $tables
-            : array_filter($tables, fn (string $table): bool => str_contains(strtolower($table), strtolower($value)));
+        if ($value === '') {
+            return $options;
+        }
 
-        return array_combine($matches, $matches);
+        return array_filter(
+            $options,
+            fn (string $table): bool => $table === Root::ALL || str_contains(strtolower($table), strtolower($value)),
+            ARRAY_FILTER_USE_KEY,
+        );
     }
 
     /**

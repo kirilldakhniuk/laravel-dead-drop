@@ -69,10 +69,18 @@ final class ExtractionGate
     }
 
     /**
+     * The root ids the source does not have. A whole-database dump starts
+     * from no row at all, so there is nothing to look for and no query to
+     * run — every other category still applies to it.
+     *
      * @return list<string>
      */
     public function rootIds(Root $root, ConfigSet $config, SchemaSet $schemas): array
     {
+        if ($root->isFull()) {
+            return [];
+        }
+
         $schema = $schemas->for($root->connection)->table($root->table);
         $pk = $schema?->primaryKey();
 

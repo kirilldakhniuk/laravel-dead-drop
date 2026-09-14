@@ -7,7 +7,11 @@ namespace DeadDrop\DeadDrop\Planning;
 use DateTimeInterface;
 use DeadDrop\DeadDrop\Config\ConfigSet;
 use DeadDrop\DeadDrop\Config\TableClass;
+use DeadDrop\DeadDrop\Config\TableConfig;
+use DeadDrop\DeadDrop\Schema\ColumnType;
 use DeadDrop\DeadDrop\Schema\SchemaSet;
+use DeadDrop\DeadDrop\Schema\Table;
+use Illuminate\Support\Facades\DB;
 
 /**
  * Turns a traversal into the ordered work a dump would do.
@@ -22,6 +26,7 @@ final class Planner
 {
     public function __construct(
         private readonly Traverser $traverser,
+        private readonly KeySetRepository $keys,
     ) {}
 
     /**
@@ -35,7 +40,7 @@ final class Planner
      */
     public function plan(Root $root, ConfigSet $config, SchemaSet $schemas, ?DateTimeInterface $since = null): ExtractionPlan
     {
-        $this->assertEveryTableIsAddressable($config, $schemas);
+        $this->assertEveryTableIsAddressable($config->connections(), $config, $schemas);
 
         $result = $this->traverser->traverse($root, $config, $schemas, $since);
 
@@ -46,20 +51,116 @@ final class Planner
     }
 
     /**
+     * Every dumpable table of every connection, whole. There is nothing to
+     * traverse — a dump that takes all the rows is referentially complete by
+     * construction — so this counts the rows instead, and only a table with a
+     * `window` narrowed by `--since` needs a key set at all.
+     *
+     * @param  string|null  $connection  the one connection to cover, or null for every configured one
+     *
+     * @throws UnsupportedTableException when a configured table cannot be addressed by a single primary key
+     * @throws CircularConnectionException when the connections reference each other in a cycle
+     */
+    public function planFull(ConfigSet $config, SchemaSet $schemas, ?DateTimeInterface $since, ?string $connection): ExtractionPlan
+    {
+        // A key set is only ever created here, so a previous run's must not
+        // be counted into this one.
+        $this->keys->dropAll();
+
+        $connections = $connection === null ? $config->connections() : [$connection];
+
+        $this->assertEveryTableIsAddressable($connections, $config, $schemas);
+
+        $steps = [];
+
+        foreach ($connections as $name) {
+            foreach ($config->for($name)->tables as $table => $tableConfig) {
+                $step = $this->fullStep($name, (string) $table, $tableConfig, $schemas, $since);
+
+                if ($step !== null) {
+                    $steps[] = $step;
+                }
+            }
+        }
+
+        return new ExtractionPlan($this->order($steps, Graph::fromConfig($config)), []);
+    }
+
+    /**
+     * One table's share of a whole-database dump, or null when it holds
+     * nothing the dump would write: a table that is not dumpable, one the
+     * schema no longer has, and one with no rows inside the window.
+     */
+    private function fullStep(string $connection, string $table, TableConfig $config, SchemaSet $schemas, ?DateTimeInterface $since): ?PlanStep
+    {
+        if ($config->removed || ($config->class !== TableClass::Data && $config->class !== TableClass::Lookup)) {
+            return null;
+        }
+
+        $meta = $schemas->for($connection)->table($table);
+
+        if ($meta === null) {
+            return null;
+        }
+
+        $keySet = $config->window === null || $since === null ? null : $this->windowed($connection, $meta, $config->window, $since);
+        $rows = $keySet === null ? DB::connection($connection)->table($table)->count() : $keySet->count();
+
+        if ($rows === 0) {
+            return null;
+        }
+
+        return new PlanStep(
+            connection: $connection,
+            table: $table,
+            keyTable: $keySet?->tableName,
+            rows: $rows,
+            estimatedBytes: intdiv($meta->estimatedBytes * $rows, max($meta->estimatedRows, 1)),
+        );
+    }
+
+    /**
+     * The keys of the rows a `--since` leaves inside a table's window, held in
+     * a key table like a traversal's own: the extraction joins it, and the
+     * keys never all exist in PHP at once.
+     */
+    private function windowed(string $connection, Table $table, string $window, DateTimeInterface $since): ?KeySet
+    {
+        $primaryKey = $table->primaryKey();
+
+        if ($primaryKey === null) {
+            return null;
+        }
+
+        $column = $table->column($primaryKey);
+        $keySet = $this->keys->create($connection, $table->name, $column === null ? ColumnType::String : $column->type);
+
+        $keySet->fill(
+            DB::connection($connection)->table($table->name)
+                ->where("{$table->name}.{$window}", '>=', $since)
+                ->select("{$table->name}.{$primaryKey} as k")
+                ->orderBy("{$table->name}.{$primaryKey}"),
+        );
+
+        return $keySet;
+    }
+
+    /**
      * A dump addresses rows by primary key, so a table without a usable one
      * cannot be dumped at all — that is a config decision, not something to
      * discover halfway through a traversal. Tables the schema no longer has
      * are drift, which `dead-drop:check` reports.
      *
+     * @param  list<string>  $connections
+     *
      * @throws UnsupportedTableException
      */
-    private function assertEveryTableIsAddressable(ConfigSet $config, SchemaSet $schemas): void
+    private function assertEveryTableIsAddressable(array $connections, ConfigSet $config, SchemaSet $schemas): void
     {
-        foreach ($config->connections as $connection => $connectionConfig) {
-            $connection = (string) $connection;
+        foreach ($connections as $connection) {
             $schema = $schemas->for($connection);
 
-            foreach ($connectionConfig->tables as $name => $tableConfig) {
+            foreach ($config->for($connection)->tables as $name => $tableConfig) {
                 if ($tableConfig->removed || $tableConfig->class === TableClass::Skip) {
                     continue;
                 }

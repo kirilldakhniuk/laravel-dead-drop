@@ -13,7 +13,6 @@ use DeadDrop\DeadDrop\Schema\SchemaSet;
 use Illuminate\Contracts\Database\Query\Expression;
 use Illuminate\Database\Grammar;
 use Illuminate\Database\Query\Builder;
-use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 use InvalidArgumentException;
 
@@ -29,8 +28,6 @@ use InvalidArgumentException;
  */
 final class Traverser
 {
-    private const int CHUNK = 5000;
-
     /**
      * The descending morph pass's distinct-type scan, which is invariant for
      * the length of one descend — the source database is only read — while the
@@ -108,11 +105,10 @@ final class Traverser
                     continue;
                 }
 
-                $this->collect(
+                $keySet->fill(
                     DB::connection($connection)->table($name)
                         ->select("{$name}.{$primaryKey} as k")
                         ->orderBy("{$name}.{$primaryKey}"),
-                    $keySet,
                 );
             }
         }
@@ -192,12 +188,11 @@ final class Traverser
         $query = DB::connection($edge->connection)->table($table)
             ->join($keys, "{$table}.{$edge->column}", '=', "{$keys}.k");
 
-        return $this->collect(
+        return $child->fill(
             $this->scope($query, $table, $config->for($edge->connection)->table($table), $since)
                 ->distinct()
                 ->select("{$table}.{$primaryKey} as k")
                 ->orderBy("{$table}.{$primaryKey}"),
-            $child,
         );
     }
 
@@ -257,12 +252,11 @@ final class Traverser
                     ->join($parent->tableName, "{$table}.{$morph['id']}", '=', "{$parent->tableName}.k")
                     ->where("{$table}.{$morph['type']}", $type);
 
-                $added += $this->collect(
+                $added += $child->fill(
                     $this->scope($query, $table, $tableConfig, $since)
                         ->distinct()
                         ->select("{$table}.{$primaryKey} as k")
                         ->orderBy("{$table}.{$primaryKey}"),
-                    $child,
                 );
             }
 
@@ -366,11 +360,10 @@ final class Traverser
             return 0;
         }
 
-        return $this->collect(
+        return $target->fill(
             $query->distinct()
                 ->select("{$edge->table}.{$edge->column} as k")
                 ->orderBy("{$edge->table}.{$edge->column}"),
-            $target,
         );
     }
 
@@ -425,14 +418,13 @@ final class Traverser
                 continue;
             }
 
-            $added += $this->collect(
+            $added += $target->fill(
                 $collected()
                     ->where("{$table}.{$morph['type']}", $type)
                     ->whereNotNull("{$table}.{$morph['id']}")
                     ->distinct()
                     ->select("{$table}.{$morph['id']} as k")
                     ->orderBy("{$table}.{$morph['id']}"),
-                $target,
             );
         }
 
@@ -604,32 +596,6 @@ final class Traverser
                 return $this->sql;
             }
         };
-    }
-
-    /**
-     * Reads the keys a pass found in chunks, adding each chunk to the key set
-     * before the next is fetched, and reports how many were new.
-     */
-    private function collect(Builder $query, KeySet $target): int
-    {
-        $added = 0;
-
-        $query->chunk(self::CHUNK, function (Collection $rows) use ($target, &$added): void {
-            /** @var list<int|string> $keys */
-            $keys = [];
-
-            foreach ($rows as $row) {
-                $key = $row->k ?? null;
-
-                if (is_int($key) || is_string($key)) {
-                    $keys[] = $key;
-                }
-            }
-
-            $added += $target->add($keys);
-        });
-
-        return $added;
     }
 
     /**

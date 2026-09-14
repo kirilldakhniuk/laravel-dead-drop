@@ -10,7 +10,7 @@
     <a href="https://packagist.org/packages/kirilldakhniuk/laravel-dead-drop"><img src="https://img.shields.io/packagist/dt/kirilldakhniuk/laravel-dead-drop.svg?style=flat-square" alt="Total Downloads"></a>
 </p>
 
-Dead Drop is a Laravel package that discovers your database schema, builds a reviewed per-connection config describing how each table should be classified, scoped and redacted, detects drift between that config and the live schema, dumps a redacted, referentially-complete slice of a root row — everything it points to or that points at it — to a portable artifact, and pulls that artifact into a local or staging database. Native executors (`mysqldump`, `mysqlsh`, `psql`), composite primary keys, whole-database dumps and schema creation on the target are not implemented yet. Requires PHP ^8.3, the `zlib` extension (artifacts are gzipped) and Laravel 12 or 13.
+Dead Drop is a Laravel package that discovers your database schema, builds a reviewed per-connection config describing how each table should be classified, scoped and redacted, detects drift between that config and the live schema, dumps a redacted, referentially-complete slice of a root row — everything it points to or that points at it — or the whole database, to a portable artifact, and pulls that artifact into a local or staging database. Native executors (`mysqldump`, `mysqlsh`, `psql`), composite primary keys and schema creation on the target are not implemented yet. Requires PHP ^8.3, the `zlib` extension (artifacts are gzipped) and Laravel 12 or 13.
 
 ## Installation
 
@@ -54,6 +54,8 @@ php artisan dead-drop:init            # discover the schema, write config/dead-d
 php artisan dead-drop:check           # fail-closed drift + redaction gate (use it in CI)
 php artisan dead-drop:dump            # interactive: pick connection, table, ids, plan or dump
 php artisan dead-drop:dump users 1 --dry-run
+php artisan dead-drop:dump --all                     # every data and lookup table, whole
+php artisan dead-drop:dump --all --since=2026-01-01  # …with windowed tables narrowed
 php artisan dead-drop:pull --connection=local_copy
 ```
 
@@ -199,17 +201,19 @@ or when a named connection has no config file at all (it tells you to run `dead-
 
 ### Dumping
 
-`dead-drop:dump` plans a referentially-complete row set starting from one root row and — unless `--dry-run` — extracts it into a redacted artifact:
+`dead-drop:dump` plans a referentially-complete row set starting from one root row — or, with `--all`, the whole database — and, unless `--dry-run`, extracts it into a redacted artifact:
 
 ```bash
 php artisan dead-drop:dump companies 1
 php artisan dead-drop:dump companies 1 2 --connection=mysql --dry-run
+php artisan dead-drop:dump --all --connection=mysql
 ```
 
 - `table` — the table the root row lives in. It must be a `data` or `lookup` table in that connection's config; anything else fails with `Table [x] is not configured for dumping on connection [c].`
 - `ids` — one or more root row ids, as separate arguments (`companies 1 2`) or one comma-separated argument (`companies 1,2`).
 - `--connection=` — the connection holding the root table. Every connection in the config directory is still loaded, because a cross-connection reference needs them; this only says where the traversal starts. Left out, the command uses the only configured connection, or your default connection when that one has a config, and says which it picked (`Using connection [mysql].`).
 - `--since=` — only take rows on or after this date for tables with a `window` column, for a narrower plan.
+- `--all` — dump every `data` and `lookup` table whole instead of a slice. See below.
 - `--path=` — config directory. Defaults to `config_path(config('dead-drop.config_path'))`.
 - `--disk=` — disk to write the artifact to. Defaults to `dead-drop.disk` (`DEAD_DROP_DISK`, default `s3`).
 - `--dry-run` — plan only; extract nothing.
@@ -218,7 +222,23 @@ Run in an interactive terminal, anything you leave out is asked for: which conne
 
 Non-interactively — `--no-interaction`, or anywhere without a terminal — nothing is ever prompted for. A missing piece fails with the argument to pass instead: `Pass a table argument, e.g. dead-drop:dump users 1 --connection=mysql.`, `Pass one or more ids, e.g. dead-drop:dump users 1 --connection=mysql.`, or `Pass --connection=<name>; configured connections: analytics, mysql.`
 
-Dumping every configured table whole is not implemented.
+#### The whole database
+
+`--all` replaces the root: instead of a slice, the dump takes every `data` and `lookup` table whole.
+
+```bash
+php artisan dead-drop:dump --all --connection=mysql
+php artisan dead-drop:dump --all --since=2026-01-01
+```
+
+- The scope is every table the connection's config classes as `data` or `lookup`, is not marked `removed`, and the live schema still has. `skip` tables are left out, as are tables with no rows.
+- `--all` takes no `table` and no `ids`: passing either fails with `--all cannot be combined with a table or ids.`
+- `--connection=` limits the dump to one connection. Without it the usual rule applies — the only configured connection, or your default connection when that one has a config — and where neither applies and nothing can be asked, every configured connection is dumped.
+- Nothing is traversed, because taking all the rows is referentially complete by construction: the plan never has unresolved references to report.
+- `--since=` narrows the tables that declare a `window` to the rows on or after that date; a table without a `window` is always taken whole.
+- Everything else is unchanged: the fail-closed extraction gate still runs before a single row moves (there is no root row, so only the root-id check does not apply), every row is still redacted by the same rules, and a table with a composite primary key — or none at all — still fails the plan.
+
+Run in an interactive terminal, the same thing is the first table choice on offer: `Whole database (every data and lookup table)`.
 
 #### Planning
 
@@ -246,7 +266,7 @@ Without `--dry-run`, the plan is put through the extraction gate before a single
 
 A `QueryException` during extraction — a hand-written `exclude` fragment, or a `window` column that turns out not to be one — is reported as `Extraction failed: {message}` and exits 1, leaving the manifest at `status: "writing"`; `dead-drop:dumps` (below) flags it and `dead-drop:pull` refuses to load it.
 
-**Phase boundary:** native executors, composite primary keys and whole-database dumps (every configured table, whole) are not implemented in this phase.
+**Phase boundary:** native executors and composite primary keys are not implemented in this phase.
 
 ### Redaction
 

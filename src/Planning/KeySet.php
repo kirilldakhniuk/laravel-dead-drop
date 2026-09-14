@@ -16,6 +16,11 @@ use Illuminate\Support\Collection;
  */
 final readonly class KeySet
 {
+    /**
+     * How many keys are read out of a query, or out of this key set, at once.
+     */
+    private const int CHUNK = 5000;
+
     public function __construct(
         private DatabaseDriver $driver,
         private Connection $db,
@@ -38,6 +43,34 @@ final readonly class KeySet
         }
 
         return $this->driver->insertKeys($this->db, $this->tableName, $keys);
+    }
+
+    /**
+     * Adds the keys a query selects as `k`, reading them in chunks and adding
+     * each one before the next is fetched, and reports how many were new. The
+     * keys never all exist in PHP at once, which is the whole point of holding
+     * them in a table.
+     */
+    public function fill(Builder $query): int
+    {
+        $added = 0;
+
+        $query->chunk(self::CHUNK, function (Collection $rows) use (&$added): void {
+            /** @var list<int|string> $keys */
+            $keys = [];
+
+            foreach ($rows as $row) {
+                $key = $row->k ?? null;
+
+                if (is_int($key) || is_string($key)) {
+                    $keys[] = $key;
+                }
+            }
+
+            $added += $this->add($keys);
+        });
+
+        return $added;
     }
 
     public function count(): int

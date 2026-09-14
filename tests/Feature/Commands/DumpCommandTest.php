@@ -12,6 +12,7 @@ use DeadDrop\DeadDrop\Schema\Introspector;
 use DeadDrop\DeadDrop\Schema\SchemaSet;
 use DeadDrop\DeadDrop\Tests\Fixtures\SchemaBuilder;
 use Illuminate\Support\Facades\Artisan;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Facades\Storage;
 
@@ -130,7 +131,16 @@ it('prompts for table, ids and mode when run bare', function () {
     // The table choices are ordered by how much of the schema points at them,
     // so the row an operator is most likely to want is the first one offered.
     $this->artisan('dead-drop:dump', ['--path' => $path])
-        ->expectsChoice('Which table holds the root row?', 'companies', ['companies', 'users', 'customers', 'orders', 'comments', 'countries', 'order_items'], true)
+        ->expectsChoice('Which table holds the root row?', 'companies', [
+            '*' => 'Whole database (every data and lookup table)',
+            'companies' => 'companies',
+            'users' => 'users',
+            'customers' => 'customers',
+            'orders' => 'orders',
+            'comments' => 'comments',
+            'countries' => 'countries',
+            'order_items' => 'order_items',
+        ], true)
         ->expectsQuestion('Which id(s)? Separate several with commas', '1')
         ->expectsChoice('What now?', 'plan', ['plan' => 'Plan only (dry run)', 'dump' => 'Dump to local:dead-drops'])
         ->expectsOutputToContain('Total rows')
@@ -147,7 +157,16 @@ it('prompts for the connection when several are configured and none is default',
 
     $this->artisan('dead-drop:dump', ['--path' => $path])
         ->expectsChoice('Which connection holds the root row?', 'dd_test', ['dd_analytics', 'dd_test'])
-        ->expectsChoice('Which table holds the root row?', 'companies', ['companies', 'users', 'customers', 'orders', 'comments', 'countries', 'order_items'])
+        ->expectsChoice('Which table holds the root row?', 'companies', [
+            '*' => 'Whole database (every data and lookup table)',
+            'companies' => 'companies',
+            'users' => 'users',
+            'customers' => 'customers',
+            'orders' => 'orders',
+            'comments' => 'comments',
+            'countries' => 'countries',
+            'order_items' => 'order_items',
+        ])
         ->expectsQuestion('Which id(s)? Separate several with commas', '1')
         ->expectsChoice('What now?', 'plan', ['plan' => 'Plan only (dry run)', 'dump' => 'Dump to local:dead-drops'])
         ->assertSuccessful();
@@ -203,4 +222,48 @@ it('refuses a connection whose every table is skipped', function () {
     $this->artisan('dead-drop:dump', ['--connection' => 'dd_test', '--path' => $path, '--no-interaction' => true])
         ->expectsOutputToContain('No table on connection [dd_test] is configured for dumping.')
         ->assertFailed();
+});
+
+it('dumps the whole database with --all and the artifact matches the source', function () {
+    $path = initFixtureConfig();
+
+    $this->artisan('dead-drop:dump', ['--all' => true, '--connection' => 'dd_test', '--path' => $path, '--disk' => 'local'])
+        ->assertSuccessful();
+
+    $manifest = (new ArtifactReader(Storage::disk('local'), 'dead-drops'))->manifest(latestArtifactId());
+    $rows = [];
+
+    foreach ($manifest->tables as $table) {
+        $rows[$table->table] = $table->rows;
+    }
+
+    // Every `data` and `lookup` table with rows, and nothing else: `failed_jobs`
+    // is skipped and `comments` is empty.
+    expect(array_keys($rows))->toEqualCanonicalizing(['companies', 'users', 'customers', 'orders', 'order_items', 'countries'])
+        ->and($manifest->root)->toBe('dd_test:*');
+
+    foreach ($rows as $table => $count) {
+        expect($count)->toBe(DB::connection('dd_test')->table($table)->count());
+    }
+});
+
+it('offers the whole database as the first table choice when prompting', function () {
+    $path = initFixtureConfig();
+
+    $this->artisan('dead-drop:dump', ['--path' => $path])
+        ->expectsChoice('Which table holds the root row?', '*', [
+            '*' => 'Whole database (every data and lookup table)',
+            'companies' => 'companies',
+            'users' => 'users',
+            'customers' => 'customers',
+            'orders' => 'orders',
+            'comments' => 'comments',
+            'countries' => 'countries',
+            'order_items' => 'order_items',
+        ], true)
+        ->expectsChoice('What now?', 'plan', ['plan' => 'Plan only (dry run)', 'dump' => 'Dump to local:dead-drops'])
+        ->expectsOutputToContain('Total rows')
+        ->assertSuccessful();
+
+    expect(Storage::disk('local')->allFiles())->toBe([]);
 });

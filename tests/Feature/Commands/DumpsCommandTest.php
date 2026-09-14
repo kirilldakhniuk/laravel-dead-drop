@@ -55,3 +55,14 @@ it('says so when there are no artifacts', function () {
         ->expectsOutputToContain('No artifacts on local:dead-drops.')
         ->assertSuccessful();
 });
+
+it('lists a whole database dump by what it covers', function () {
+    $path = initFixtureConfig();
+
+    $this->artisan('dead-drop:dump', ['--all' => true, '--connection' => 'dd_test', '--path' => $path, '--disk' => 'local'])
+        ->assertSuccessful();
+
+    Artisan::call('dead-drop:dumps', ['--disk' => 'local']);
+
+    expect(Artisan::output())->toContain('whole database (dd_test)');
+});

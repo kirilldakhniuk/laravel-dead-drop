@@ -60,3 +60,24 @@ it('is idempotent across two pulls', function () {
     expect(DB::connection('dd_target')->table('orders')->count())->toBe(2)
         ->and(DB::connection('dd_target')->table('users')->count())->toBe(2);
 });
+
+it('round trips a whole database dump into the target', function () {
+    $path = tempDirectory();
+
+    $this->artisan('dead-drop:init', ['--connection' => ['dd_test'], '--path' => $path, '--no-interaction' => true])->assertSuccessful();
+    $this->artisan('dead-drop:check', ['--connection' => ['dd_test'], '--path' => $path])->assertExitCode(0);
+    $this->artisan('dead-drop:dump', ['--all' => true, '--connection' => 'dd_test', '--path' => $path, '--disk' => 'local'])->assertSuccessful();
+    $this->artisan('dead-drop:pull', ['--connection' => 'dd_target', '--disk' => 'local', '--force' => true])->assertSuccessful();
+
+    $source = DB::connection('dd_test');
+    $target = DB::connection('dd_target');
+
+    foreach (['companies', 'users', 'customers', 'orders', 'order_items', 'countries'] as $table) {
+        expect($target->table($table)->count())->toBe($source->table($table)->count());
+    }
+
+    // A whole-database dump is still a redacted one, and still leaves the
+    // tables nobody dumps alone.
+    expect($target->table('users')->where('id', 10)->value('email'))->toMatch('/^[0-9a-f]{16}@example\.test$/')
+        ->and($target->table('failed_jobs')->count())->toBe(0);
+});

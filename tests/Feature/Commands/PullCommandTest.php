@@ -195,7 +195,7 @@ it('explains how to add a target when every connection is a source', function ()
     dumpFixture('dd_test.companies:1', initFixtureConfig());
     config()->set('database.connections', ['dd_test' => config('database.connections.dd_test')]);
 
-    $this->artisan('dead-drop:pull', ['--disk' => 'local', '--force' => true])
+    $this->artisan('dead-drop:pull', ['--disk' => 'local', '--no-interaction' => true, '--force' => true])
         ->expectsOutputToContain('nowhere safe to load it')
         ->expectsOutputToContain("'local_copy' =>")
         ->expectsOutputToContain('--connection=local_copy')

@@ -331,6 +331,10 @@ trait ResolvesDumpRoot
      * The offered tables whose name contains what has been typed so far. The
      * whole-database choice is not a table name and always stays offered.
      *
+     * A search that matches nothing falls back to the whole list, because the
+     * fallback prompt a non-TTY run gets is a Symfony choice question, and one
+     * with no choices left is an exception rather than an empty list.
+     *
      * @param  array<string, string>  $options  label keyed by table
      * @return array<string, string>
      */
@@ -341,11 +345,13 @@ trait ResolvesDumpRoot
         }
 
         // A table named `2024` is an integer key by the time it gets here.
-        return array_filter(
+        $matching = array_filter(
             $options,
             fn (int|string $key): bool => $key === Root::ALL || str_contains(strtolower((string) $key), strtolower($value)),
             ARRAY_FILTER_USE_KEY,
         );
+
+        return $matching === [] ? $options : $matching;
     }
 
     /**

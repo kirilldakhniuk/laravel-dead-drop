@@ -86,15 +86,17 @@ trait ResolvesPullTarget
     private function chooseArtifact(ArtifactReader $reader, string $disk, string $path): ?Manifest
     {
         $complete = [];
-        $withheld = 0;
+        $incomplete = 0;
+        $unreadable = 0;
 
         foreach ($reader->ids() as $id) {
             try {
                 $manifest = $reader->manifest($id);
             } catch (Throwable) {
                 // One unreadable manifest is a fact about that artifact, not
-                // a reason to stop offering the rest.
-                $withheld++;
+                // a reason to stop offering the rest — and not the same fact
+                // as a dump that died halfway, so it is counted apart.
+                $unreadable++;
 
                 continue;
             }
@@ -105,11 +107,15 @@ trait ResolvesPullTarget
                 continue;
             }
 
-            $withheld++;
+            $incomplete++;
         }
 
-        if ($withheld > 0) {
-            $this->line("<comment>{$withheld} incomplete artifact(s) not offered.</comment>");
+        if ($incomplete > 0) {
+            $this->line("<comment>{$incomplete} incomplete artifact(s) not offered.</comment>");
+        }
+
+        if ($unreadable > 0) {
+            $this->line("<comment>{$unreadable} unreadable artifact(s) not offered.</comment>");
         }
 
         if ($complete === []) {
@@ -133,13 +139,27 @@ trait ResolvesPullTarget
             ? (string) select(label: $label, options: $options, default: (string) $ids[0])
             : (string) search(label: $label, options: fn (string $value): array => $this->matchingArtifacts($options, $value));
 
-        return $complete[$chosen] ?? null;
+        if (! isset($complete[$chosen])) {
+            // Nothing should be able to answer with an id that was not
+            // offered, but a load that cannot say which artifact it would
+            // read must say so rather than fail silently.
+            $this->error("Artifact [{$chosen}] is no longer available.");
+
+            return null;
+        }
+
+        return $complete[$chosen];
     }
 
     /**
-     * The offered artifacts whose label contains what has been typed so far:
-     * the root, the date and the size are all things an operator remembers
-     * about the dump they want, and none of them is the id.
+     * The offered artifacts matching what has been typed so far. The id is
+     * searched along with the label: the root, the date and the size are what
+     * an operator remembers, and the id is what `dead-drop:dumps` printed for
+     * them to paste.
+     *
+     * A search that matches nothing falls back to the whole list, because the
+     * fallback prompt a non-TTY run gets is a Symfony choice question, and one
+     * with no choices left is an exception rather than an empty list.
      *
      * @param  array<array-key, string>  $options  label keyed by artifact id
      * @return array<array-key, string>
@@ -150,10 +170,13 @@ trait ResolvesPullTarget
             return $options;
         }
 
-        return array_filter(
+        $matching = array_filter(
             $options,
-            fn (string $label): bool => str_contains(strtolower($label), strtolower($value)),
+            fn (string $label, int|string $id): bool => str_contains(strtolower("{$id} {$label}"), strtolower($value)),
+            ARRAY_FILTER_USE_BOTH,
         );
+
+        return $matching === [] ? $options : $matching;
     }
 
     /**
@@ -280,8 +303,10 @@ trait ResolvesPullTarget
      */
     private function nowhereSafe(Manifest $manifest, array $configured, bool $refused = false): void
     {
+        // The whole block is written as one stream: half a paste-ready config
+        // on stdout and its reason on stderr is two halves of one message.
         if (! $refused) {
-            $this->error('Every configured connection (['.implode(', ', $configured).']) is a source of this artifact, so there is nowhere safe to load it.');
+            $this->line('<error>Every configured connection (['.implode(', ', $configured).']) is a source of this artifact, so there is nowhere safe to load it.</error>');
         }
 
         $this->line('Add a target connection to config/database.php, for example:');

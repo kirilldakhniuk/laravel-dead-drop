@@ -25,7 +25,7 @@ function writeSampleArtifact(string $id, string $status = Manifest::STATUS_COMPL
     $file->append(['id' => 2, 'name' => null, 'flags' => null, 'blob' => null, 'ok' => 0]);
     $counts = $file->finish();
 
-    $manifest = new Manifest($id, $status, '2026-09-12T14:15:00+00:00', 'dev', 'dd_test.things:1', null, 'php', ['dd_test' => ['driver' => 'sqlite']], [
+    $manifest = new Manifest($id, $status, '2026-09-12T14:15:00+00:00', 'dev', 'dd_test.things:1', null, 'php', ['dd_test' => ['driver' => 'sqlite', 'database' => ':memory:']], [
         new TableManifest('dd_test', 'things', 'dd_test.things.ndjson.gz', 'ndjson', $counts['rows'], $counts['bytes'], 'id', [
             ['name' => 'id', 'type' => 'int'], ['name' => 'name', 'type' => 'string'], ['name' => 'flags', 'type' => 'json'], ['name' => 'blob', 'type' => 'binary'], ['name' => 'ok', 'type' => 'bool'],
         ], []),

@@ -100,13 +100,40 @@ it('fails clearly when an after hook cannot be resolved', function () {
     expect(DB::connection('dd_target')->table('orders')->count())->toBe(2);
 });
 
-it('skips the prompt with --no-interaction', function () {
+it('requires --force when non-interactive', function () {
     dumpFixture('dd_test.companies:1', initFixtureConfig());
 
     $this->artisan('dead-drop:pull', ['--connection' => 'dd_target', '--disk' => 'local', '--no-interaction' => true])
+        ->expectsOutputToContain('Pass --force to load without confirmation when running non-interactively.')
+        ->assertFailed();
+
+    expect(DB::connection('dd_target')->table('orders')->count())->toBe(0);
+});
+
+it('uses the default connection when non-interactive with --force', function () {
+    dumpFixture('dd_test.companies:1', initFixtureConfig());
+    config()->set('database.default', 'dd_target');
+
+    $this->artisan('dead-drop:pull', ['--disk' => 'local', '--no-interaction' => true, '--force' => true])
+        ->expectsOutputToContain('Loaded')
         ->assertSuccessful();
 
     expect(DB::connection('dd_target')->table('orders')->count())->toBe(2);
+});
+
+it('names the database the target connection is open on, not the one the config now says', function () {
+    $id = dumpFixture('dd_test.companies:1', initFixtureConfig());
+    $count = count((new ArtifactReader(Storage::disk('local'), 'dead-drops'))->manifest($id)->tables);
+
+    // The connection is already resolved, so a config key edited behind it is
+    // exactly what an application using DB_URL looks like: the confirmation
+    // has to name the database the load will actually write to.
+    expect(DB::connection('dd_target')->getDatabaseName())->toBe(':memory:');
+    config()->set('database.connections.dd_target.database', 'not-the-database');
+
+    $this->artisan('dead-drop:pull', ['--connection' => 'dd_target', '--disk' => 'local'])
+        ->expectsConfirmation("Replace {$count} tables on connection [dd_target] (sqlite: :memory:) with artifact [{$id}]?", 'no')
+        ->assertSuccessful();
 });
 
 it('loads into the connection the artifact was dumped from and warns', function () {

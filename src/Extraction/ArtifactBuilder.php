@@ -173,12 +173,28 @@ final class ArtifactBuilder
                 throw new RuntimeException("Executor [{$executor->name()}] does not support the {$driver} driver used by connection [{$step->connection}].");
             }
 
-            $database = $connection->getDatabaseName();
-
-            $connections[$step->connection] = ['driver' => $driver, 'database' => $database === '' ? null : $database];
+            $connections[$step->connection] = [
+                'driver' => $driver,
+                'database' => $this->databaseName($driver, $connection->getDatabaseName()),
+            ];
         }
 
         return $connections;
+    }
+
+    /**
+     * The name of the database a connection read from, and no more of it than
+     * that: a SQLite database is a path, and the directories above the file
+     * describe the machine the dump ran on rather than anything an artifact
+     * should carry off it. `:memory:` is already a name.
+     */
+    private function databaseName(string $driver, string $database): ?string
+    {
+        if ($database === '') {
+            return null;
+        }
+
+        return $driver === 'sqlite' ? basename($database) : $database;
     }
 
     private function packageVersion(): string

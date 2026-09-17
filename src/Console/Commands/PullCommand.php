@@ -78,10 +78,21 @@ final class PullCommand extends Command
 
         $this->warnWhenTargetIsSource($manifest, $target);
 
-        if (! $this->confirmed($manifest, $target)) {
-            $this->info('Aborted.');
+        if ($this->option('force') !== true) {
+            // A scripted run cannot be asked, and a pull is a destructive
+            // write, so saying nothing is not the same as saying yes: the
+            // intent has to be on the command line.
+            if (! $this->input->isInteractive()) {
+                $this->error('Pass --force to load without confirmation when running non-interactively.');
 
-            return self::SUCCESS;
+                return self::FAILURE;
+            }
+
+            if (! $this->confirmed($manifest, $target)) {
+                $this->info('Aborted.');
+
+                return self::SUCCESS;
+            }
         }
 
         try {
@@ -119,12 +130,8 @@ final class PullCommand extends Command
 
     private function confirmed(Manifest $manifest, string $target): bool
     {
-        if ($this->option('force') === true || ! $this->input->isInteractive()) {
-            return true;
-        }
-
         $tables = count($manifest->tables);
-        $label = "Replace {$tables} tables on connection [{$target}] ({$this->describeConnection($target)}) with artifact [{$manifest->id}]?";
+        $label = "Replace {$tables} tables on connection [{$target}] ({$this->describeTarget($target)}) with artifact [{$manifest->id}]?";
 
         if ($this->targetSharesSourceDatabaseName($manifest, $target)) {
             $label .= ' — same database name as the source';

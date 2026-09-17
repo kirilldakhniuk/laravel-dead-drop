@@ -2,6 +2,7 @@
 
 declare(strict_types=1);
 
+use DeadDrop\DeadDrop\Artifacts\ArtifactReader;
 use DeadDrop\DeadDrop\Config\ConfigLoader;
 use DeadDrop\DeadDrop\Extraction\ArtifactBuilder;
 use DeadDrop\DeadDrop\Planning\KeySetRepository;
@@ -11,6 +12,7 @@ use DeadDrop\DeadDrop\Redaction\RedactionContext;
 use DeadDrop\DeadDrop\Schema\Introspector;
 use DeadDrop\DeadDrop\Schema\SchemaSet;
 use DeadDrop\DeadDrop\Tests\Fixtures\SchemaBuilder;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
 
 beforeEach(function () {
@@ -47,4 +49,20 @@ it('refuses to export a step whose key set is gone', function () {
 
     expect($files)->toHaveCount(1)
         ->and($files[0])->toEndWith('/manifest.json');
+});
+
+it('records a sqlite database by its file name, not its path', function () {
+    $file = tempDirectory().'/app.sqlite';
+    touch($file);
+    config()->set('database.connections.dd_test.database', $file);
+    DB::purge('dd_test');
+    SchemaBuilder::migrate('dd_test');
+    SchemaBuilder::seedTwoCompanies('dd_test');
+
+    $id = dumpFixture('dd_test.companies:1');
+    $manifest = (new ArtifactReader(Storage::disk('local'), 'dead-drops'))->manifest($id);
+
+    // The directories above the file are the machine the dump ran on, and an
+    // artifact carries none of it.
+    expect($manifest->connections['dd_test'])->toBe(['driver' => 'sqlite', 'database' => 'app.sqlite']);
 });

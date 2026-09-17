@@ -9,6 +9,7 @@ use DateTimeInterface;
 use DeadDrop\DeadDrop\Artifacts\ArtifactReader;
 use DeadDrop\DeadDrop\Artifacts\Manifest;
 use DeadDrop\DeadDrop\Planning\Root;
+use Illuminate\Support\Facades\DB;
 use InvalidArgumentException;
 use Throwable;
 
@@ -235,6 +236,12 @@ trait ResolvesPullTarget
         $default = (string) config('database.default');
 
         if (! $this->input->isInteractive()) {
+            if (! in_array($default, $configured, true)) {
+                $this->error("Unknown database connection [{$default}].");
+
+                return null;
+            }
+
             return $default;
         }
 
@@ -274,14 +281,42 @@ trait ResolvesPullTarget
      */
     private function targetSharesSourceDatabaseName(Manifest $manifest, string $target): bool
     {
-        $database = $manifest->connections[$target]['database'] ?? null;
+        $source = $manifest->connections[$target]['database'] ?? null;
 
-        return $database !== null && $database === $this->connectionValue($target, 'database');
+        if ($source === null) {
+            return false;
+        }
+
+        $connection = DB::connection($target);
+        $database = $connection->getDatabaseName();
+
+        // The manifest records a SQLite database by its file name, because the
+        // directories above it describe the machine the dump ran on, so the
+        // target is reduced the same way before the two are compared.
+        return $source === ($connection->getDriverName() === 'sqlite' ? basename($database) : $database);
     }
 
     /**
-     * What a connection actually points at, so a name like `local_copy` is not
-     * the only thing standing between an operator and the wrong database.
+     * What the connection about to be replaced actually points at, read from
+     * the connection itself rather than the raw config: an application that
+     * configures its database with `DB_URL` has no `database` key to print,
+     * and the confirmation has to name the database the load will write to.
+     * Resolving a connection does not open it, so this costs nothing.
+     */
+    private function describeTarget(string $name): string
+    {
+        $connection = DB::connection($name);
+        $driver = $connection->getDriverName();
+        $database = $connection->getDatabaseName();
+
+        return $database === '' ? $driver : "{$driver}: {$database}";
+    }
+
+    /**
+     * What a connection points at according to the config, so a name like
+     * `mysql` is not the only thing standing between an operator and the wrong
+     * database. Every candidate in the list is described, so this reads the
+     * config rather than resolving connections the operator will not choose.
      */
     private function describeConnection(string $name): string
     {

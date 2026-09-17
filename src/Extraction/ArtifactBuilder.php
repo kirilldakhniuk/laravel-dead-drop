@@ -151,7 +151,11 @@ final class ArtifactBuilder
      * executor cannot read — a native executor that only speaks MySQL should
      * say so before a single file is written.
      *
-     * @return array<string, array{driver: string}>
+     * The database each one points at is recorded alongside its driver — the
+     * name only, never a host or a credential — so a pull can say whether the
+     * target it is about to replace is the database the dump came from.
+     *
+     * @return array<string, array{driver: string, database: string|null}>
      */
     private function connections(ExtractionPlan $plan, Executor $executor): array
     {
@@ -162,13 +166,16 @@ final class ArtifactBuilder
                 continue;
             }
 
-            $driver = DB::connection($step->connection)->getDriverName();
+            $connection = DB::connection($step->connection);
+            $driver = $connection->getDriverName();
 
             if (! $executor->supports($driver)) {
                 throw new RuntimeException("Executor [{$executor->name()}] does not support the {$driver} driver used by connection [{$step->connection}].");
             }
 
-            $connections[$step->connection] = ['driver' => $driver];
+            $database = $connection->getDatabaseName();
+
+            $connections[$step->connection] = ['driver' => $driver, 'database' => $database === '' ? null : $database];
         }
 
         return $connections;

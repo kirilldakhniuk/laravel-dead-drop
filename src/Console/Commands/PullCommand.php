@@ -34,7 +34,7 @@ final class PullCommand extends Command
     use ResolvesPullTarget;
 
     /** @var string */
-    protected $signature = 'dead-drop:pull {id? : Artifact id (prompted when omitted)} {--connection= : Target connection (prompted when omitted; must not be a source of the artifact)} {--disk= : Disk holding artifacts (defaults to dead-drop.disk)} {--path= : Path on the disk (defaults to dead-drop.path)} {--force : Skip the confirmation}';
+    protected $signature = 'dead-drop:pull {id? : Artifact id (prompted when omitted)} {--connection= : Target connection (prompted when omitted; defaults to the app default connection)} {--disk= : Disk holding artifacts (defaults to dead-drop.disk)} {--path= : Path on the disk (defaults to dead-drop.path)} {--force : Skip the confirmation}';
 
     /** @var string */
     protected $description = 'Load a dump artifact into a local or staging database';
@@ -42,8 +42,8 @@ final class PullCommand extends Command
     public function handle(PullRunner $runner): int
     {
         // The guard comes before the disk is even touched: a pull is a
-        // destructive write, and the one place it must never happen is the
-        // database the artifact came from.
+        // destructive write, and — now that any connection can be its target —
+        // the environment is what keeps it off a production database.
         $allowed = array_values(array_map('strval', (array) config('dead-drop.pull.allow_environments')));
 
         if (! $this->laravel->environment($allowed)) {
@@ -75,6 +75,8 @@ final class PullCommand extends Command
         if ($target === null) {
             return self::FAILURE;
         }
+
+        $this->warnWhenTargetIsSource($manifest, $target);
 
         if (! $this->confirmed($manifest, $target)) {
             $this->info('Aborted.');
@@ -122,11 +124,13 @@ final class PullCommand extends Command
         }
 
         $tables = count($manifest->tables);
+        $label = "Replace {$tables} tables on connection [{$target}] ({$this->describeConnection($target)}) with artifact [{$manifest->id}]?";
 
-        return confirm(
-            label: "Replace {$tables} tables on connection [{$target}] ({$this->describeConnection($target)}) with artifact [{$manifest->id}]?",
-            default: false,
-        );
+        if ($this->targetSharesSourceDatabaseName($manifest, $target)) {
+            $label .= ' — same database name as the source';
+        }
+
+        return confirm(label: $label, default: false);
     }
 
     /**

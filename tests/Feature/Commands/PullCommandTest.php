@@ -109,15 +109,35 @@ it('skips the prompt with --no-interaction', function () {
     expect(DB::connection('dd_target')->table('orders')->count())->toBe(2);
 });
 
-it('refuses to load back into a source connection of the artifact', function () {
-    dumpFixture('dd_test.companies:1', initFixtureConfig());
+it('loads into the connection the artifact was dumped from and warns', function () {
+    $id = dumpFixture('dd_test.companies:1', initFixtureConfig());
+    $manifest = (new ArtifactReader(Storage::disk('local'), 'dead-drops'))->manifest($id);
 
     $this->artisan('dead-drop:pull', ['--connection' => 'dd_test', '--disk' => 'local', '--force' => true])
-        ->expectsOutputToContain('Refusing to load into [dd_test]: it is a source connection of this artifact.')
-        ->assertFailed();
+        ->expectsOutputToContain('This is the connection the artifact was dumped from')
+        ->expectsOutputToContain('Loaded')
+        ->assertSuccessful();
 
-    // The slice only ever held company 1, so the untouched rows of company 2
-    // are the proof nothing was replaced.
+    // The source is now its own redacted copy: the slice replaced the tables
+    // it names, row for row, and the emails came back hashed.
+    foreach ($manifest->tables as $table) {
+        expect(DB::connection('dd_test')->table($table->table)->count())->toBe($table->rows);
+    }
+
+    expect(DB::connection('dd_test')->table('users')->where('id', 10)->value('email'))
+        ->toMatch('/^[0-9a-f]{16}@example\\.test$/');
+});
+
+it('mentions a matching source database name in the confirmation', function () {
+    $id = dumpFixture('dd_test.companies:1', initFixtureConfig());
+    $count = count((new ArtifactReader(Storage::disk('local'), 'dead-drops'))->manifest($id)->tables);
+
+    $this->artisan('dead-drop:pull', ['--connection' => 'dd_test', '--disk' => 'local'])
+        ->expectsConfirmation("Replace {$count} tables on connection [dd_test] (sqlite: :memory:) with artifact [{$id}]? \u{2014} same database name as the source", 'no')
+        ->expectsOutputToContain('Aborted.')
+        ->assertSuccessful();
+
+    // Answering no leaves the source exactly as it was.
     expect(DB::connection('dd_test')->table('orders')->count())->toBe(3)
         ->and(DB::connection('dd_test')->table('users')->where('id', 10)->value('email'))->toBe('a@acme.test');
 });
@@ -135,8 +155,8 @@ it('prompts for the artifact and the target connection when run bare', function 
     dumpFixture('dd_test.companies:1', $path);
     dumpFixture('dd_test.companies:2', $path);
 
-    // Only the fixture connections are offered, so the choice list is the
-    // candidate rule itself rather than whatever Testbench ships.
+    // Only the fixture connections are configured, so the choice list is
+    // every one of them rather than whatever Testbench ships.
     config()->set('database.connections', Arr::only((array) config('database.connections'), ['dd_test', 'dd_analytics', 'dd_target']));
 
     $reader = new ArtifactReader(Storage::disk('local'), 'dead-drops');
@@ -149,6 +169,7 @@ it('prompts for the artifact and the target connection when run bare', function 
             $ids[1] => artifactLabel($reader->manifest($ids[1])),
         ], true)
         ->expectsChoice('Which connection should receive the data?', 'dd_target', [
+            'dd_test' => 'dd_test (sqlite: :memory:)',
             'dd_analytics' => 'dd_analytics (sqlite: :memory:)',
             'dd_target' => 'dd_target (sqlite: :memory:)',
         ], true)
@@ -189,34 +210,4 @@ it('does not offer incomplete artifacts and says so', function () {
         ], true)
         ->expectsOutputToContain('Loaded')
         ->assertSuccessful();
-});
-
-it('explains how to add a target when every connection is a source', function () {
-    dumpFixture('dd_test.companies:1', initFixtureConfig());
-    config()->set('database.connections', ['dd_test' => config('database.connections.dd_test')]);
-
-    $this->artisan('dead-drop:pull', ['--disk' => 'local', '--no-interaction' => true, '--force' => true])
-        ->expectsOutputToContain('nowhere safe to load it')
-        ->expectsOutputToContain("'local_copy' =>")
-        ->expectsOutputToContain('--connection=local_copy')
-        ->assertFailed();
-});
-
-it('lists candidates when the default connection is a source in non-interactive mode', function () {
-    dumpFixture('dd_test.companies:1', initFixtureConfig());
-    config()->set('database.default', 'dd_test');
-    config()->set('database.connections', Arr::only((array) config('database.connections'), ['dd_test', 'dd_analytics', 'dd_target']));
-
-    $this->artisan('dead-drop:pull', ['--disk' => 'local', '--no-interaction' => true, '--force' => true])
-        ->expectsOutputToContain('The default connection [dd_test] is a source of this artifact; pass --connection=<name>. Candidates: dd_analytics, dd_target.')
-        ->assertFailed();
-});
-
-it('appends candidates to the source-connection refusal', function () {
-    dumpFixture('dd_test.companies:1', initFixtureConfig());
-    config()->set('database.connections', Arr::only((array) config('database.connections'), ['dd_test', 'dd_analytics', 'dd_target']));
-
-    $this->artisan('dead-drop:pull', ['--connection' => 'dd_test', '--disk' => 'local', '--force' => true])
-        ->expectsOutputToContain('Refusing to load into [dd_test]: it is a source connection of this artifact. Target one of: dd_analytics, dd_target.')
-        ->assertFailed();
 });

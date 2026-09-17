@@ -87,7 +87,7 @@ Root: `{disk}:{path}/{dump-id}/` where `dump-id` is `Ymd-His-<6 random lowercase
   "root": "mysql.companies:994",
   "since": null | "2026-06-01T00:00:00+00:00",
   "executor": "php",
-  "connections": { "mysql": { "driver": "mysql" } },
+  "connections": { "mysql": { "driver": "mysql", "database": "app_production" } },
   "tables": [
     {
       "connection": "mysql", "table": "companies", "file": "mysql.companies.ndjson.gz",
@@ -100,7 +100,7 @@ Root: `{disk}:{path}/{dump-id}/` where `dump-id` is `Ymd-His-<6 random lowercase
 }
 ```
 
-`tables` is in plan-step order (parents before children), which is also load order. `columns[].type` is the phase-1 `ColumnType` backing value; loaders use it to restore scalars (integers, booleans, decimals as strings, datetimes as strings, JSON columns as JSON text, binary as base64 with a `{"__base64": "<payload>"}` wrapper). `status` is written as `writing` first and flipped to `complete` last, so a crash leaves an artifact that `pull` refuses and `dumps` flags.
+`connections[].database` is the name of the database each connection read from — the name only, never a host or a credential — recorded so a pull can tell the operator that the connection it is about to replace looks like the one the dump came from; a manifest written without it reads as `null`. `tables` is in plan-step order (parents before children), which is also load order. `columns[].type` is the phase-1 `ColumnType` backing value; loaders use it to restore scalars (integers, booleans, decimals as strings, datetimes as strings, JSON columns as JSON text, binary as base64 with a `{"__base64": "<payload>"}` wrapper). `status` is written as `writing` first and flipped to `complete` last, so a crash leaves an artifact that `pull` refuses and `dumps` flags.
 
 `ArtifactWriter` and `ArtifactReader` are the only classes that know this layout. Both use `Storage::disk($disk)`. Writing streams: the writer opens a temporary local gzip stream per table, appends rows, and moves the finished file to the disk with `Storage::put(path, stream)`, so S3 gets one upload per table and nothing is buffered in memory.
 

@@ -301,7 +301,7 @@ A dump is written to `{disk}:{path}/{id}/`, where `{id}` is `Ymd-His-<6 random l
 
 - `version` — the manifest format version (currently `1`).
 - `id`, `status` (`writing` or `complete`), `created_at`, `package_version`, `root`, `since`, `executor`.
-- `connections` — every connection in the dump, keyed by name, each with its `driver`.
+- `connections` — every connection in the dump, keyed by name, each with its `driver` and the `database` name it was read from (the name only — never a host or a credential; `null` for a driver that has none, and absent from artifacts written before this was recorded).
 - `tables` — in plan-step (and load) order, each with `connection`, `table`, `file`, `format`, `rows`, `bytes`, `primary_key`, `columns` (`name` and `ColumnType` backing value, in schema order) and `redacted` (the columns whose values were changed — a `keep` entry runs as a passthrough and is deliberately not listed).
 - `unresolved` — the same unresolved-reference entries the plan prints (`connection`, `table`, `column`, `reason`).
 
@@ -322,37 +322,25 @@ It prints id, created, root, status, table count, total rows and total size, new
 
 ```bash
 php artisan dead-drop:pull                              # interactive: pick the artifact and a target connection
-php artisan dead-drop:pull [id] --connection=local_copy --force
+php artisan dead-drop:pull [id] --connection=mysql --force
 ```
 
 - `id` (optional argument) — the artifact to load. Run bare in an interactive terminal, it asks which artifact to load, newest first, each one labelled with its root, the time it was taken and how much it holds; an artifact that is not `status: "complete"` is never offered, and the count of those left out is printed above the list. A disk holding exactly one complete artifact is not a question: it is named and used. Run non-interactively, it takes the newest complete artifact as before.
-- `--connection=` — the target connection, which must not be one of the artifact's own source connections. Interactively you are asked which of the remaining connections should receive the data, each shown with the driver and database it points at; non-interactively it uses `database.default` when that is not a source, and otherwise names the connections you can pass.
+- `--connection=` — the target connection. Interactively you are asked which of the configured connections should receive the data, each shown with the driver and database it points at, with the application's default connection preselected; non-interactively it uses `database.default`.
 - `--disk=` / `--path=` — where to read the artifact from. Default to `dead-drop.disk` / `dead-drop.path`.
 - `--force` — skip the confirmation prompt.
 
-It refuses to run unless `app()->environment()` matches one of `pull.allow_environments` (default `['local', 'staging']`) — everywhere else it prints `dead-drop:pull refuses to run in the [{environment}] environment; allowed: {comma-separated list, or "none"}` and exits 1. This is checked before the disk is even touched, because a pull is a destructive write and the one place it must never happen is the database the artifact came from.
+It refuses to run unless `app()->environment()` matches one of `pull.allow_environments` (default `['local', 'staging']`) — everywhere else it prints `dead-drop:pull refuses to run in the [{environment}] environment; allowed: {comma-separated list, or "none"}` and exits 1. This is checked before the disk is even touched, because a pull is a destructive write and the one place it must never happen is production.
 
 It also refuses when no complete artifact is found (`No complete artifact found on {disk}:{path}. Run dead-drop:dump first.`), when a named artifact is not `status: "complete"` (`Artifact [{id}] is incomplete (status: {status}) and cannot be loaded.`), when its manifest cannot be parsed (`Artifact [{id}] has a corrupt manifest.`), and when the target connection is not one of `database.connections` (`Unknown database connection [{connection}].`).
 
-It refuses the target itself when the artifact was dumped from it — `Refusing to load into [{target}]: it is a source connection of this artifact. Target one of: {candidates}.`, with no override — because replacing a table with the slice of itself the dump carried is exactly the loss the environment guard exists to prevent. The match is by connection *name* against the keys of the manifest's `connections`, not by host or database: a local app whose connection is also called `mysql` cannot pull an artifact dumped from a connection called `mysql`, and has to name its target connection something else.
-
-A single-connection app has nowhere safe to load an artifact it dumped from that connection, so the command says how to make somewhere rather than refusing and stopping:
+`pull` replaces whichever connection you point it at, including the one the artifact was dumped from — which is the normal local workflow: you dump on production over a connection called `mysql` and load the artifact into the `mysql` of your laptop. A connection *name* says nothing about which database is behind it, so it is not what protects production; the environment allow-list above and the confirmation below are. When the target is a connection the artifact names as a source, the command says so before it asks:
 
 ```
-Every configured connection ([sqlite]) is a source of this artifact, so there is nowhere safe to load it.
-Add a target connection to config/database.php, for example:
-
-    'local_copy' => [
-        'driver' => 'sqlite',
-        'database' => database_path('local_copy.sqlite'),
-        'prefix' => '',
-        'foreign_key_constraints' => true,
-    ],
-
-then create its schema (php artisan migrate --database=local_copy) and run: php artisan dead-drop:pull --connection=local_copy
+This is the connection the artifact was dumped from; its rows will be replaced by their redacted copies.
 ```
 
-The example is written in the driver of the artifact's first source connection — a SQLite file next to the app, or a second database on the same server with its credentials read from the environment. Dead Drop does not create the schema: the target has to be migrated first, and a table the artifact names but the target does not have is skipped rather than created.
+Dead Drop does not create the schema: the target has to be migrated first, and a table the artifact names but the target does not have is skipped rather than created.
 
 The shape of the target is checked against the whole manifest before a single row moves, so a target that cannot hold the slice is refused intact rather than left half replaced:
 
@@ -363,7 +351,7 @@ The shape of the target is checked against the whole manifest before a single ro
 
 A table the artifact names but the target does not have is skipped and named in the summary, not refused. A generated column on the target (MySQL/Postgres/SQLite `GENERATED ALWAYS AS …`, stored or virtual) is left out of the insert and recomputed by the database — the artifact carries the source's computed value, and no engine accepts being told what a generated column is — so it is not required of the artifact either.
 
-Unless `--force` (or running non-interactively), it asks for confirmation before writing anything: `Replace {n} tables on connection [{target}] with artifact [{id}]?`. Once confirmed, it replaces one table at a time inside its own transaction: delete every row, insert the artifact's rows, and compare the count against the manifest, rolling that table back on a mismatch. A database error during a load is reported as `Loading [{connection}.{table}] failed: {engine message}`, because the engine's own message names a column and a constraint but never which table was being written. Referential-integrity checks are turned off for the whole run (MySQL `SET FOREIGN_KEY_CHECKS = 0`, Postgres `SET session_replication_role = replica` — which needs superuser or an equivalent role on many managed hosts, e.g. Amazon RDS's `rds_superuser` — SQLite `PRAGMA foreign_keys = OFF`) because a slice arrives in plan order, not an order any one database would accept row by row, and are always restored afterward. On MySQL the loading session also drops the strictness a faithful copy cannot satisfy from its own `sql_mode` (`STRICT_TRANS_TABLES`, `STRICT_ALL_TABLES`, `NO_ZERO_DATE`, `NO_ZERO_IN_DATE`, `ERROR_FOR_DIVISION_BY_ZERO`, leaving every other mode as it was), so a legacy value the source held — a `0000-00-00 00:00:00` datetime — loads as it was instead of being refused; the original `sql_mode` is restored when the load ends. Tables the artifact does not name are never touched, so this is a targeted replace, not a restore.
+Unless `--force` (or running non-interactively), it asks for confirmation before writing anything: `Replace {n} tables on connection [{target}] ({driver}: {database}) with artifact [{id}]?`, with ` — same database name as the source` appended when the target is a source connection of the artifact whose database carries the name the dump was read from — a hint that this may be the very database you dumped, never a block. Once confirmed, it replaces one table at a time inside its own transaction: delete every row, insert the artifact's rows, and compare the count against the manifest, rolling that table back on a mismatch. A database error during a load is reported as `Loading [{connection}.{table}] failed: {engine message}`, because the engine's own message names a column and a constraint but never which table was being written. Referential-integrity checks are turned off for the whole run (MySQL `SET FOREIGN_KEY_CHECKS = 0`, Postgres `SET session_replication_role = replica` — which needs superuser or an equivalent role on many managed hosts, e.g. Amazon RDS's `rds_superuser` — SQLite `PRAGMA foreign_keys = OFF`) because a slice arrives in plan order, not an order any one database would accept row by row, and are always restored afterward. On MySQL the loading session also drops the strictness a faithful copy cannot satisfy from its own `sql_mode` (`STRICT_TRANS_TABLES`, `STRICT_ALL_TABLES`, `NO_ZERO_DATE`, `NO_ZERO_IN_DATE`, `ERROR_FOR_DIVISION_BY_ZERO`, leaving every other mode as it was), so a legacy value the source held — a `0000-00-00 00:00:00` datetime — loads as it was instead of being refused; the original `sql_mode` is restored when the load ends. Tables the artifact does not name are never touched, so this is a targeted replace, not a restore.
 
 Once every table is replaced, the summary (`Loaded {rows} rows into {n} tables from artifact [{id}].`, plus one line per skipped table) is printed *before* `pull.after` runs, so a hook failure never hides that the load already happened. Each `pull.after` entry (default `[]`) is either a class-string — resolved from the container and invoked with the run's `PullReport` — or an Artisan command name run with `Artisan::call()`; the first one that throws, exits non-zero, or fails to resolve stops the rest and fails the command with the artifact already loaded. An entry that is not a non-empty string is skipped with `Skipping non-string after hook entry.` rather than ignored silently.
 

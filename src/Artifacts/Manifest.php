@@ -22,7 +22,7 @@ final readonly class Manifest
     public const int VERSION = 1;
 
     /**
-     * @param  array<string, array{driver: string}>  $connections  keyed by connection name
+     * @param  array<string, array{driver: string, database: string|null}>  $connections  keyed by connection name, each with the driver and the name of the database it was read from
      * @param  list<TableManifest>  $tables  in plan-step (load) order
      * @param  list<array{connection: string, table: string, column: string, reason: string}>  $unresolved
      */
@@ -54,7 +54,7 @@ final readonly class Manifest
      *     root: string,
      *     since: string|null,
      *     executor: string,
-     *     connections: array<string, array{driver: string}>,
+     *     connections: array<string, array{driver: string, database: string|null}>,
      *     tables: list<array{connection: string, table: string, file: string, format: string, rows: int, bytes: int, primary_key: string, columns: list<array{name: string, type: string}>, redacted: list<string>}>,
      *     unresolved: list<array{connection: string, table: string, column: string, reason: string}>,
      * }
@@ -181,8 +181,12 @@ final readonly class Manifest
     }
 
     /**
+     * The connections a dump read from. `database` was added after the format
+     * was first written, so a manifest without it is read as a connection
+     * whose database name is simply unknown rather than a malformed one.
+     *
      * @param  array<array-key, mixed>  $raw
-     * @return array<string, array{driver: string}>
+     * @return array<string, array{driver: string, database: string|null}>
      */
     private static function readConnections(array $raw): array
     {
@@ -193,7 +197,13 @@ final readonly class Manifest
                 throw new InvalidArgumentException('Unsupported or malformed manifest.');
             }
 
-            $connections[(string) $name] = ['driver' => $connection['driver']];
+            $database = $connection['database'] ?? null;
+
+            if ($database !== null && ! is_string($database)) {
+                throw new InvalidArgumentException('Unsupported or malformed manifest.');
+            }
+
+            $connections[(string) $name] = ['driver' => $connection['driver'], 'database' => $database];
         }
 
         return $connections;

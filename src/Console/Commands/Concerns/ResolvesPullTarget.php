@@ -17,15 +17,18 @@ use function Laravel\Prompts\select;
 
 /**
  * Turns `dead-drop:pull`'s artifact argument and `--connection` option into
- * the two things a load needs — the artifact and a connection that is not one
- * of its sources — asking for whatever the operator left out.
+ * the two things a load needs — the artifact and the connection to replace —
+ * asking for whatever the operator left out.
  *
  * The same two rules as the dump side hold here: anything given on the command
  * line is never asked for, and nothing at all is asked for when the command is
  * not interactive, where a missing piece fails with the argument to pass
- * instead. Every refusal names what to do next, because the commonest way to
- * meet this command is a single-connection app whose only connection is the
- * one the artifact came from.
+ * instead. Any configured connection can be the target, including one the
+ * artifact was dumped from: dumping on production over `mysql` and loading
+ * into a laptop's `mysql` is the workflow this command exists for, and a
+ * connection name says nothing about which database is behind it. What keeps
+ * the load off the database it came from is the environment guard and the
+ * confirmation, not the name.
  */
 trait ResolvesPullTarget
 {
@@ -208,158 +211,72 @@ trait ResolvesPullTarget
 
     /**
      * The connection to load into, or `null` once the reason there is none has
-     * been printed. Loading a slice back into the database it was taken from
-     * would replace whole tables with the part of themselves the dump carried,
-     * and no environment guard can catch that — the source connections are
-     * named in the artifact, so they are read from there and left out.
+     * been printed. Every configured connection is a candidate — the artifact
+     * names the connections it came from, but a name is not a database, and
+     * the local copy of a production app is usually configured under the same
+     * one.
      */
     private function resolveTarget(Manifest $manifest): ?string
     {
         $configured = array_map('strval', array_keys((array) config('database.connections')));
-        $candidates = array_values(array_filter(
-            $configured,
-            fn (string $name): bool => ! array_key_exists($name, $manifest->connections),
-        ));
 
         $named = $this->option('connection');
 
         if (is_string($named) && $named !== '') {
-            return $this->namedTarget($named, $manifest, $configured, $candidates);
-        }
+            if (! in_array($named, $configured, true)) {
+                $this->error("Unknown database connection [{$named}].");
 
-        if ($candidates === []) {
-            $this->nowhereSafe($manifest, $configured);
+                return null;
+            }
 
-            return null;
+            return $named;
         }
 
         $default = (string) config('database.default');
 
         if (! $this->input->isInteractive()) {
-            if (in_array($default, $candidates, true)) {
-                return $default;
-            }
-
-            $this->error("The default connection [{$default}] is a source of this artifact; pass --connection=<name>. Candidates: ".implode(', ', $candidates).'.');
-
-            return null;
+            return $default;
         }
 
         $options = [];
 
-        foreach ($candidates as $candidate) {
+        foreach ($configured as $candidate) {
             $options[$candidate] = "{$candidate} ({$this->describeConnection($candidate)})";
         }
 
         return (string) select(
             label: 'Which connection should receive the data?',
             options: $options,
-            default: in_array($default, $candidates, true) ? $default : null,
+            default: in_array($default, $configured, true) ? $default : null,
         );
     }
 
     /**
-     * A target the operator named. Both refusals carry the way out: the
-     * connections this artifact can be loaded into, or — when there are none —
-     * how to make one.
-     *
-     * @param  list<string>  $configured
-     * @param  list<string>  $candidates
+     * Says so, once the target is known, when the artifact was dumped from
+     * that same connection. It is not a refusal — it is the normal way to
+     * refresh a laptop — but the rows about to be deleted are the rows the
+     * artifact was taken from, now redacted, and that is worth reading before
+     * the confirmation.
      */
-    private function namedTarget(string $named, Manifest $manifest, array $configured, array $candidates): ?string
+    private function warnWhenTargetIsSource(Manifest $manifest, string $target): void
     {
-        if (! in_array($named, $configured, true)) {
-            $this->error("Unknown database connection [{$named}].");
-
-            return null;
+        if (array_key_exists($target, $manifest->connections)) {
+            $this->warn('This is the connection the artifact was dumped from; its rows will be replaced by their redacted copies.');
         }
-
-        if (! array_key_exists($named, $manifest->connections)) {
-            return $named;
-        }
-
-        $refusal = "Refusing to load into [{$named}]: it is a source connection of this artifact.";
-
-        if ($candidates === []) {
-            $this->error($refusal);
-            $this->nowhereSafe($manifest, $configured, refused: true);
-
-            return null;
-        }
-
-        $this->error($refusal.' Target one of: '.implode(', ', $candidates).'.');
-
-        return null;
     }
 
     /**
-     * The whole reason an operator hits this command in a single-connection
-     * app: there is no target, and none can be chosen — one has to be added.
-     * So the message is the config block to paste, in the driver they already
-     * run, rather than a refusal to work out for themselves.
-     *
-     * @param  list<string>  $configured
-     * @param  bool  $refused  whether a refusal has already been printed above this
+     * Whether the target is a source connection of the artifact pointing at a
+     * database of the same name as the dump read from. A name match on both
+     * the connection and the database is as close as an artifact can get to
+     * saying "this may be the very database you dumped", so the confirmation
+     * says it — and still only asks.
      */
-    private function nowhereSafe(Manifest $manifest, array $configured, bool $refused = false): void
+    private function targetSharesSourceDatabaseName(Manifest $manifest, string $target): bool
     {
-        // The whole block is written as one stream: half a paste-ready config
-        // on stdout and its reason on stderr is two halves of one message.
-        if (! $refused) {
-            $this->line('<error>Every configured connection (['.implode(', ', $configured).']) is a source of this artifact, so there is nowhere safe to load it.</error>');
-        }
+        $database = $manifest->connections[$target]['database'] ?? null;
 
-        $this->line('Add a target connection to config/database.php, for example:');
-        $this->line('');
-
-        foreach ($this->exampleConnection($manifest) as $line) {
-            $this->line($line);
-        }
-
-        $this->line('');
-        $this->line('then create its schema (php artisan migrate --database=local_copy) and run: php artisan dead-drop:pull --connection=local_copy');
-    }
-
-    /**
-     * A `local_copy` connection in the shape of the artifact's first source:
-     * a file next to the app for SQLite, a second database on the same server
-     * otherwise, with the credentials left to the environment.
-     *
-     * @return list<string>
-     */
-    private function exampleConnection(Manifest $manifest): array
-    {
-        $source = (string) array_key_first($manifest->connections);
-        $driver = $manifest->connections[$source]['driver'] ?? 'sqlite';
-
-        if ($driver === 'sqlite') {
-            return [
-                "    'local_copy' => [",
-                "        'driver' => 'sqlite',",
-                "        'database' => database_path('local_copy.sqlite'),",
-                "        'prefix' => '',",
-                "        'foreign_key_constraints' => true,",
-                '    ],',
-            ];
-        }
-
-        $database = $this->connectionValue($source, 'database');
-        $port = match ($driver) {
-            'pgsql' => '5432',
-            'sqlsrv' => '1433',
-            default => '3306',
-        };
-
-        return [
-            "    'local_copy' => [",
-            "        'driver' => '{$driver}',",
-            "        'host' => env('DB_LOCAL_COPY_HOST', '127.0.0.1'),",
-            "        'port' => env('DB_LOCAL_COPY_PORT', '{$port}'),",
-            "        'database' => '".($database === '' ? $source : $database)."_local_copy',",
-            "        'username' => env('DB_LOCAL_COPY_USERNAME', 'forge'),",
-            "        'password' => env('DB_LOCAL_COPY_PASSWORD', ''),",
-            '    ],',
-        ];
+        return $database !== null && $database === $this->connectionValue($target, 'database');
     }
 
     /**

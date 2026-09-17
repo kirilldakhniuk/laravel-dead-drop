@@ -15,7 +15,7 @@ function sampleManifest(): Manifest
         root: 'dd_test.companies:1',
         since: null,
         executor: 'php',
-        connections: ['dd_test' => ['driver' => 'sqlite']],
+        connections: ['dd_test' => ['driver' => 'sqlite', 'database' => 'app']],
         tables: [new TableManifest('dd_test', 'companies', 'dd_test.companies.ndjson.gz', 'ndjson', 3, 120, 'id', [['name' => 'id', 'type' => 'int'], ['name' => 'name', 'type' => 'string']], [])],
         unresolved: [['connection' => 'dd_test', 'table' => 'users', 'column' => 'failed_job_id', 'reason' => 'target table failed_jobs is skipped']],
     );
@@ -38,6 +38,13 @@ it('flips status and appends tables immutably', function () {
         ->and(count($manifest->tables))->toBe(1)
         ->and($complete->totalRows())->toBe(5)
         ->and($complete->totalBytes())->toBe(200);
+});
+
+it('reads a connection written before the source database name was recorded', function () {
+    $raw = sampleManifest()->toArray();
+    $raw['connections'] = ['dd_test' => ['driver' => 'sqlite']];
+
+    expect(Manifest::fromArray($raw)->connections)->toBe(['dd_test' => ['driver' => 'sqlite', 'database' => null]]);
 });
 
 it('rejects a manifest of another version', function () {

@@ -82,6 +82,18 @@ function dumpFixture(?string $configDirectory = null, string $connection = 'dd_t
     return latestArtifactId();
 }
 
+/**
+ * Rewrites a generated config file so every table in it is `skip`ped.
+ */
+function skipEveryTable(string $file): void
+{
+    file_put_contents($file, str_replace(
+        ["'class' => 'data'", "'class' => 'lookup'"],
+        "'class' => 'skip'",
+        (string) file_get_contents($file),
+    ));
+}
+
 function traverseFixture(string $rootSpec, ?string $configDirectory = null, ?DateTimeInterface $since = null): TraversalResult
 {
     $directory = $configDirectory ?? initFixtureConfig();

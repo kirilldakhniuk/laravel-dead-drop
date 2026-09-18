@@ -78,13 +78,19 @@ final class DumpCommand extends Command
         try {
             $schemas = $this->schemas($config, $introspector);
             $plan = $planner->planFull($config, $schemas, $root->scope());
+
+            if ($plan->steps === []) {
+                $this->error('Nothing to dump: every table in scope is skipped or missing.');
+
+                return self::FAILURE;
+            }
+
+            // The gate runs on a dry run too, as a rehearsal: what a dump
+            // would be refused for is exactly what a plan is read to find out.
+            $violations = $gate->check($root, $config, $schemas, $context->salt, $this->configuredSalt())->lines();
             $manifest = null;
 
-            // A dry run reads nothing out of the tables it plans; an
-            // extraction has to clear the whole gate first.
             if (! $dryRun) {
-                $violations = $gate->check($root, $config, $schemas, $context->salt, $this->configuredSalt())->lines();
-
                 if ($violations !== []) {
                     foreach ($violations as $violation) {
                         $this->error($violation);
@@ -116,8 +122,23 @@ final class DumpCommand extends Command
 
         $this->report($plan);
 
+        // A refused dry run still prints its plan: the plan is what was asked
+        // for, and the violations are what stands between it and one.
+        if ($violations !== []) {
+            $this->error('This dump would be refused:');
+
+            foreach ($violations as $violation) {
+                $this->error($violation);
+            }
+
+            return self::FAILURE;
+        }
+
         if ($manifest !== null) {
             $this->info("Artifact: {$this->artifactDisk()}:{$this->artifactPath()}/{$manifest->id}");
+        } elseif ($this->plannedByChoice) {
+            // An operator who answered the prompt could have meant to dump.
+            $this->line('Planned only; nothing was written.');
         }
 
         return self::SUCCESS;

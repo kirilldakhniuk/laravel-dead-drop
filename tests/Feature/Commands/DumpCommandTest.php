@@ -109,6 +109,19 @@ it('leaves no key tables behind after a real dump', function () {
     expect($leftovers)->toBe([]);
 });
 
+it('refuses a dump with nothing in it and writes no artifact', function () {
+    $path = initFixtureConfig();
+    skipEveryTable($path.'/dd_test.php');
+
+    // A connection whose every table is skipped is a reviewed decision, but an
+    // artifact holding no table at all is a surprise nobody asked for.
+    $this->artisan('dead-drop:dump', ['--connection' => 'dd_test', '--path' => $path, '--disk' => 'local', '--no-interaction' => true])
+        ->expectsOutputToContain('Nothing to dump: every table in scope is skipped or missing.')
+        ->assertFailed();
+
+    expect(Storage::disk('local')->allFiles())->toBe([]);
+});
+
 it('uses the only configured connection without asking', function () {
     $path = initFixtureConfig();
 
@@ -125,6 +138,7 @@ it('asks whether to plan or dump when run bare', function () {
     $this->artisan('dead-drop:dump', ['--path' => $path])
         ->expectsChoice('What now?', 'plan', ['plan' => 'Plan only (dry run)', 'dump' => 'Dump to local:dead-drops'])
         ->expectsOutputToContain('Total rows')
+        ->expectsOutputToContain('Planned only; nothing was written.')
         ->assertSuccessful();
 
     expect(Storage::disk('local')->allFiles())->toBe([]);

@@ -17,11 +17,18 @@ use function Laravel\Prompts\select;
  * writes anything.
  *
  * Two rules hold everywhere here: anything given on the command line is never
- * asked for, and nothing at all is asked for when the command is not
- * interactive — a scripted run plans or dumps exactly what its options say.
+ * asked for, and nothing at all is asked for unless a human is at a terminal —
+ * a scripted run plans or dumps exactly what its options say.
  */
 trait ResolvesDumpConnection
 {
+    /**
+     * Whether the run stopped at the mode prompt and was told to plan. An
+     * explicit `--dry-run` says so itself; an answered prompt is worth
+     * reporting back, because the operator could have meant to dump.
+     */
+    private bool $plannedByChoice = false;
+
     /**
      * The whole-database root to plan from, or `null` once the reason there is
      * none has been printed.
@@ -72,7 +79,7 @@ trait ResolvesDumpConnection
             return $this->using($default);
         }
 
-        if (! $this->input->isInteractive()) {
+        if (! $this->canAsk()) {
             // Nothing names a connection, none of them is preferred, and there
             // is nobody to ask: a dump of everything covers every configured
             // connection rather than failing.
@@ -147,7 +154,9 @@ trait ResolvesDumpConnection
     /**
      * Plan only, or extract. `--dry-run` settles it outright; otherwise an
      * operator at a terminal is asked, because the two are one keystroke apart
-     * and only one of them writes data.
+     * and only one of them writes data. Nobody at a terminal means nobody to
+     * ask: the run extracts, rather than silently accepting the prompt's
+     * default and writing nothing.
      */
     private function planOnly(string $disk, string $path): bool
     {
@@ -155,14 +164,40 @@ trait ResolvesDumpConnection
             return true;
         }
 
-        if (! $this->input->isInteractive()) {
+        if (! $this->canAsk()) {
             return false;
         }
 
-        return select(
+        $this->plannedByChoice = select(
             label: 'What now?',
             options: ['plan' => 'Plan only (dry run)', 'dump' => "Dump to {$disk}:{$path}"],
             default: 'plan',
         ) === 'plan';
+
+        return $this->plannedByChoice;
+    }
+
+    /**
+     * Whether a question could actually be answered — the same condition
+     * Laravel puts on `Prompt::interactive()`. A cron job, a Docker
+     * entrypoint or a CI step that forgot `--no-interaction` is still
+     * interactive as far as Symfony is concerned, and a prompt there would
+     * quietly return its own default answer, so a run with no terminal in
+     * front of it behaves exactly like `--no-interaction` instead. Under
+     * tests the framework treats prompts as answerable, and so does this.
+     */
+    private function canAsk(): bool
+    {
+        return $this->input->isInteractive() && ($this->hasTerminal() || $this->laravel->runningUnitTests());
+    }
+
+    /**
+     * Whether standard input is a terminal a question could be answered at.
+     * `STDIN` is undefined outside the CLI SAPI, and `stream_isatty()` can be
+     * disabled by a hardened build, so both are checked before it is called.
+     */
+    private function hasTerminal(): bool
+    {
+        return defined('STDIN') && function_exists('stream_isatty') && stream_isatty(STDIN);
     }
 }

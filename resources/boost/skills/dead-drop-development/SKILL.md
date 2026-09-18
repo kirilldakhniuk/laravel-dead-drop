@@ -2,8 +2,8 @@
 name: dead-drop-development
 description: >
   Enroll database connections, review the generated config, and dump, list
-  and pull redacted, referentially-complete row extractions with the Dead
-  Drop package.
+  and pull redacted, referentially-complete database extractions with the
+  Dead Drop package.
 license: MIT
 metadata:
   author: Kirill D.
@@ -11,7 +11,7 @@ metadata:
 
 # Dead Drop
 
-Use this skill when a Laravel application needs to adopt the Dead Drop package: enrolling a database connection, reviewing the config it generates, gating CI on drift, dumping a redacted slice of a row and everything it depends on, listing artifacts, or pulling an artifact into a local or staging database.
+Use this skill when a Laravel application needs to adopt the Dead Drop package: enrolling a database connection, reviewing the config it generates, gating CI on drift, dumping a redacted copy of the whole database, listing artifacts, or pulling an artifact into a local or staging database.
 
 Dead Drop discovers a connection's schema, writes a reviewed `<connection>.php` config describing how each table should be classified, scoped and redacted, detects drift between that config and the live schema, dumps the whole database — every `data` and `lookup` table, redacted — into a referentially-complete artifact, and pulls that artifact into a target connection. Native executors (`mysqldump`, `mysqlsh`, `psql`), composite primary keys, and schema creation on the target are not implemented — do not tell a consumer they can use them.
 
@@ -49,7 +49,7 @@ Run with no `--connection` in an interactive terminal to be prompted for which `
 
 Open the written `<connection>.php` and check, per table:
 
-- `class`: `data` (scoped and redacted), `lookup` (small reference table, copied whole), or `skip` (never dumped).
+- `class`: `data` (dumped whole today and redacted; scoped by the traversal once scoped dumps are exposed), `lookup` (small reference table, copied whole), or `skip` (never dumped).
 - `redact`: confirm or correct the suggested transformer (`hash`, `mask`, `null`, `scramble`, `bcrypt:secret`, `fixed:redacted`) for every sensitive column, and replace any `review` placeholder — `dead-drop:check` and the `dead-drop:dump` gate both fail while one is left. `hash`/`mask` only work on string columns and `scramble` only on date/datetime columns; a primary key or reference column can never carry a `redact` entry.
 - `references`: each entry points at `table.column` (or `connection.table.column` for a cross-connection target) with a `descend` flag (`false` means the edge is only followed upward, never down — use it for self-references and audit columns like `created_by`) and a `source` (`fk`, `eloquent`, `guessed`, `manual`) that records how confidently the edge was found.
 - `window` / `exclude`: `window` names a `created_at`-like column for date scoping; `exclude` is a hand-written SQL boolean fragment naming rows to drop from a descending scope. Both only narrow what a *descending* pass collects — an ascended row is never filtered out by either — and neither is applied by today's whole-database `dead-drop:dump`; they are the contract of the scoped dump that is implemented but not yet exposed as a command.
@@ -72,7 +72,7 @@ php artisan dead-drop:dump [--connection=<name>] [--dry-run] [--disk=<disk>] [--
 
 `--connection=` names the connection to dump — every configured connection is still loaded, because cross-connection references need them — and is inferred when only one connection is configured or the default connection has a config (`Using connection [mysql].`). Where neither applies, an interactive run asks (`Which connection should be dumped?`) and a non-interactive one dumps every configured connection. A connection whose every table is `skip` is named (`No dumpable tables on connection [x]; skipped.`) and left out rather than failing the run. In an interactive terminal the only other question is `What now?` — plan only, or dump; non-interactively nothing is prompted and the run extracts unless `--dry-run` says otherwise.
 
-`--dry-run` plans without extracting: it prints the row count and estimated size per table. Without `--dry-run`, the plan is put through a fail-closed gate (schema drift, a redaction salt shorter than 16 characters after resolving `APP_KEY`, invalid `redact` placements) before a single row moves; on success it writes a `manifest.json` (`status: "writing"`), exports every table through the configured `Executor` with each row redacted, flips the manifest to `status: "complete"`, and prints `Artifact: {disk}:{path}/{id}`. A composite primary key — or no primary key at all — fails the plan before anything is read.
+`--dry-run` plans without extracting: it prints the row count and estimated size per table, and rehearses the gate — a plan that would be refused prints `This dump would be refused:` with the violations and exits non-zero. A plan with nothing in it is refused outright (`Nothing to dump: every table in scope is skipped or missing.`), dry run or not. Without `--dry-run`, the plan is put through a fail-closed gate (schema drift, a redaction salt shorter than 16 characters after resolving `APP_KEY`, invalid `redact` placements) before a single row moves; on success it writes a `manifest.json` (`status: "writing"`), exports every table through the configured `Executor` with each row redacted, flips the manifest to `status: "complete"`, and prints `Artifact: {disk}:{path}/{id}`. A composite primary key — or no primary key at all — fails the plan before anything is read.
 
 Scoped dumps are not exposed: the planner can traverse from a single root row (descending to children, ascending to referenced parents), and that engine is implemented and tested, but no command starts one. Do not tell a consumer they can dump a slice today.
 

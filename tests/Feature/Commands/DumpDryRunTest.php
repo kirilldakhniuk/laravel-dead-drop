@@ -5,16 +5,21 @@ declare(strict_types=1);
 use DeadDrop\DeadDrop\Config\ConfigLoader;
 use DeadDrop\DeadDrop\Planning\Planner;
 use DeadDrop\DeadDrop\Planning\Root;
+use DeadDrop\DeadDrop\Redaction\RedactionContext;
 use DeadDrop\DeadDrop\Schema\Introspector;
 use DeadDrop\DeadDrop\Schema\SchemaSet;
 use DeadDrop\DeadDrop\Tests\Fixtures\SchemaBuilder;
 use Illuminate\Support\Facades\Artisan;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Facades\Storage;
 
 beforeEach(function () {
     SchemaBuilder::migrate('dd_test');
     SchemaBuilder::seedTwoCompanies('dd_test');
+    // A dry run rehearses the extraction gate, which needs a resolvable salt
+    // to report anything but its own absence.
+    fakeArtifactDisk();
 });
 
 it('reports row counts per table', function () {
@@ -84,20 +89,52 @@ it('plans every data and lookup table whole', function () {
 });
 
 it('names a connection with nothing to dump and plans the rest', function () {
-    $path = initFixtureConfig();
-    $file = $path.'/dd_test.php';
-
-    file_put_contents($file, str_replace(
-        ["'class' => 'data'", "'class' => 'lookup'"],
-        "'class' => 'skip'",
-        (string) file_get_contents($file),
-    ));
+    SchemaBuilder::migrate('dd_analytics');
+    SchemaBuilder::seedTwoCompanies('dd_analytics');
+    $path = tempDirectory();
+    $this->artisan('dead-drop:init', ['--connection' => ['dd_test', 'dd_analytics'], '--path' => $path, '--no-interaction' => true])->assertSuccessful();
+    config()->set('database.default', 'sqlite');
+    skipEveryTable($path.'/dd_test.php');
 
     // Every table skipped is a reviewed decision, not a reason to fail a run
-    // that asked for whatever there is.
+    // that asked for whatever there is — as long as something is left.
+    Artisan::call('dead-drop:dump', ['--path' => $path, '--dry-run' => true, '--no-interaction' => true]);
+    $output = Artisan::output();
+
+    expect($output)->toContain('No dumpable tables on connection [dd_test]; skipped.')
+        ->toContain('dd_analytics')
+        ->toContain('Total rows');
+});
+
+it('rehearses the gate on a dry run and still prints the plan', function () {
+    $path = initFixtureConfig();
+    config()->set('dead-drop.redaction.salt', null);
+    config()->set('app.key', '');
+    app()->forgetInstance(RedactionContext::class);
+
+    // A plan an operator reads to decide whether to dump has to say that the
+    // dump would not start at all.
+    $exitCode = Artisan::call('dead-drop:dump', ['--connection' => 'dd_test', '--path' => $path, '--dry-run' => true, '--no-interaction' => true]);
+
+    expect($exitCode)->toBe(1)
+        ->and(Artisan::output())->toContain('Total rows')
+        ->toContain('This dump would be refused:')
+        ->toContain('redaction.salt is not set and APP_KEY is empty');
+});
+
+it('reports a planning failure by the phase it happened in', function () {
+    $path = initFixtureConfig();
+
+    // A database the connection can no longer read: the engine's complaint is
+    // passed on, named by the phase that ran into it.
+    $file = tempDirectory().'/not-a-database.sqlite';
+    file_put_contents($file, 'this is not an SQLite database');
+    config()->set('database.connections.dd_test.database', $file);
+    DB::purge('dd_test');
+
     $this->artisan('dead-drop:dump', ['--connection' => 'dd_test', '--path' => $path, '--dry-run' => true, '--no-interaction' => true])
-        ->expectsOutputToContain('No dumpable tables on connection [dd_test]; skipped.')
-        ->assertSuccessful();
+        ->expectsOutputToContain('Planning failed:')
+        ->assertFailed();
 });
 
 it('covers every configured connection when none can be named', function () {

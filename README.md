@@ -214,17 +214,19 @@ What the dump contains:
 - A connection whose every table is `skip` is named (`No dumpable tables on connection [x]; skipped.`) and left out rather than failing the run. Note that `dead-drop:pull` refuses an artifact that carries the same bare table name from two connections, so a multi-connection dump of schemas that share table names has to be pulled per connection.
 - The fail-closed extraction gate still runs before a single row moves, every row is still redacted by the same rules, and a table with a composite primary key — or none at all — still fails the plan.
 
-Run in an interactive terminal, two things are asked: which connection to dump (only when several are configured and the default connection has no config), and then whether to plan or extract. Non-interactively — `--no-interaction`, or anywhere without a terminal — nothing is prompted for and the run extracts unless `--dry-run` says otherwise.
+Run in a real terminal, two things are asked: which connection to dump (only when several are configured and the default connection has no config), and then whether to plan or extract — answering `plan` prints the plan and `Planned only; nothing was written.` Prompts only ever appear in a terminal: with `--no-interaction`, and anywhere stdin is not a TTY (cron, a container entrypoint, a CI step), the run behaves exactly as `--no-interaction` does — nothing is prompted for and it extracts unless `--dry-run` says otherwise.
+
+A plan with nothing in it — every table in scope `skip`ped, `removed` or gone from the schema — is refused with `Nothing to dump: every table in scope is skipped or missing.` rather than written out as an empty artifact.
 
 #### Scoped dumps
 
-The planner can also traverse from a single root row: descending to every child row that points at it (honouring `descend`, `window`, `exclude` and Eloquent-style polymorphic pairs) and then ascending to every row a collected row references, to a fixed point, so the slice is referentially complete. That engine is fully implemented and tested — it is simply not exposed as a command yet, so today `dead-drop:dump` means the whole database and nothing else. The `references`, `descend`, `window`, `exclude` and `morph` keys `dead-drop:init` writes and `dead-drop:check` verifies are its contract, which is why they are still generated and documented.
+The planner can also traverse from a single root row: descending to every child row that points at it (honouring `descend`, `window`, `exclude` and Eloquent-style polymorphic pairs) and then ascending to every row a collected row references, to a fixed point, so the slice is referentially complete. That engine is fully implemented and tested — it is simply not exposed as a command yet, so today `dead-drop:dump` means the whole database and nothing else. The `references`, `descend`, `window`, `exclude` and `morph` keys `dead-drop:init` writes and `dead-drop:check` verifies are its contract, which is why they are still generated and documented. A traversal holds its key sets in temporary tables that only exist on the session that created them, so the command that eventually exposes it has to own `KeySetRepository::dropAll()` in a `finally` (and, on MySQL, needs `CREATE TEMPORARY TABLES` and a connection that is not transaction-pooled); today's whole-database dump creates none.
 
 #### Planning
 
 Both a dry run and a real dump start by planning: every dumpable table the schema still has is counted, and the plan is printed as a table of connection, table, row count and estimated size, followed by the total row count, total estimated size, and the unresolved references (always none — there is no traversal to leave any). A table with a composite primary key, or no primary key at all, cannot be addressed by a dump and makes the whole plan fail with a clear error before anything is read.
 
-`--dry-run` stops here.
+`--dry-run` stops here, but it still rehearses the extraction gate (below): a plan a dump would be refused for prints `This dump would be refused:` followed by the violations and exits 1, so a plan never says yes to something the real run would reject.
 
 #### Extraction
 
@@ -232,7 +234,7 @@ Without `--dry-run`, the plan is put through the extraction gate before a single
 
 1. select an executor through `ExecutorManager::driver()` — `config('dead-drop.executor')` (`DEAD_DROP_EXECUTOR`, default `php`) names it; an unknown name fails with `Unsupported DeadDrop executor [{name}].`;
 2. write `manifest.json` with `status: "writing"`;
-3. export every plan step in order, printing one progress line per table (`  mysql.companies … 3 rows`) as it goes — each row is redacted before it is written, and the whole read for a step happens through the write connection, for the same reason planning does;
+3. export every plan step in order, printing one progress line per table (`  mysql.companies … 3 rows`) as it goes — each row is redacted before it is written, and the read for a step goes through the write connection, so a source with a read/write split reads its own committed rows rather than a replica that may lag behind them;
 4. flip the manifest's `status` to `"complete"`;
 5. print the plan table, totals and unresolved references (as above), followed by `Artifact: {disk}:{path}/{id}`.
 

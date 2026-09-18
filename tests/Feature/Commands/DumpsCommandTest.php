@@ -15,8 +15,8 @@ beforeEach(function () {
 
 it('lists artifacts newest first', function () {
     $path = initFixtureConfig();
-    dumpFixture('dd_test.companies:1', $path);
-    dumpFixture('dd_test.companies:1', $path);
+    dumpFixture($path);
+    dumpFixture($path);
 
     // Ids carry the UTC timestamp first, so newest-first is a descending sort
     // of the ids themselves — which is what the reader reports and what the
@@ -32,14 +32,14 @@ it('lists artifacts newest first', function () {
     expect($ids)->toHaveCount(2)
         ->and($exitCode)->toBe(0)
         ->and($output)->toContain('complete')
-        // The root is listed the way an operator would type it back, not as
-        // the manifest's storage spec.
-        ->toContain('companies #1 (dd_test)')
+        // The root is listed by what it covers, not as the manifest's
+        // storage spec.
+        ->toContain('whole database (dd_test)')
         ->and(strpos($output, $ids[0]))->toBeLessThan(strpos($output, $ids[1]));
 });
 
 it('marks an unreadable manifest instead of aborting the listing', function () {
-    $id = dumpFixture('dd_test.companies:1', initFixtureConfig());
+    $id = dumpFixture(initFixtureConfig());
     Storage::disk('local')->put('dead-drops/20260101-000000-broken/manifest.json', 'not json');
 
     $exitCode = Artisan::call('dead-drop:dumps', ['--disk' => 'local']);
@@ -54,15 +54,4 @@ it('says so when there are no artifacts', function () {
     $this->artisan('dead-drop:dumps', ['--disk' => 'local'])
         ->expectsOutputToContain('No artifacts on local:dead-drops.')
         ->assertSuccessful();
-});
-
-it('lists a whole database dump by what it covers', function () {
-    $path = initFixtureConfig();
-
-    $this->artisan('dead-drop:dump', ['--all' => true, '--connection' => 'dd_test', '--path' => $path, '--disk' => 'local'])
-        ->assertSuccessful();
-
-    Artisan::call('dead-drop:dumps', ['--disk' => 'local']);
-
-    expect(Artisan::output())->toContain('whole database (dd_test)');
 });

@@ -51,7 +51,7 @@ final class Planner
      * Every dumpable table of the connections in scope, whole. Nothing is
      * traversed and no rows are held anywhere: taking all of them is
      * referentially complete by construction, so this only counts them. A
-     * `window`, an `exclude` and `--since` all scope a traversal, and a
+     * `window`, an `exclude` and a `since` date all scope a traversal, and a
      * whole-database dump has none — narrowing one table while its children
      * came along whole would leave rows pointing at nothing.
      *

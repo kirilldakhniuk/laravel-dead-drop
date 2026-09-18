@@ -13,11 +13,11 @@ metadata:
 
 Use this skill when a Laravel application needs to adopt the Dead Drop package: enrolling a database connection, reviewing the config it generates, gating CI on drift, dumping a redacted slice of a row and everything it depends on, listing artifacts, or pulling an artifact into a local or staging database.
 
-Dead Drop discovers a connection's schema, writes a reviewed `<connection>.php` config describing how each table should be classified, scoped and redacted, detects drift between that config and the live schema, dumps a referentially-complete, redacted artifact starting from one root row — or the whole database with `--all` — and pulls that artifact into a target connection. Native executors (`mysqldump`, `mysqlsh`, `psql`), composite primary keys, and schema creation on the target are not implemented — do not tell a consumer they can use them.
+Dead Drop discovers a connection's schema, writes a reviewed `<connection>.php` config describing how each table should be classified, scoped and redacted, detects drift between that config and the live schema, dumps the whole database — every `data` and `lookup` table, redacted — into a referentially-complete artifact, and pulls that artifact into a target connection. Native executors (`mysqldump`, `mysqlsh`, `psql`), composite primary keys, and schema creation on the target are not implemented — do not tell a consumer they can use them.
 
 ## Primary Goal
 
-- Enroll a connection with `dead-drop:init`, keep it honest with `dead-drop:check`, dump a redacted slice with `dead-drop:dump`, see what is on a disk with `dead-drop:dumps`, and load one into a target database with `dead-drop:pull` — using only the commands and config keys the package actually implements.
+- Enroll a connection with `dead-drop:init`, keep it honest with `dead-drop:check`, dump a redacted copy of the database with `dead-drop:dump`, see what is on a disk with `dead-drop:dumps`, and load one into a target database with `dead-drop:pull` — using only the commands and config keys the package actually implements.
 
 ## Workflow
 
@@ -52,7 +52,7 @@ Open the written `<connection>.php` and check, per table:
 - `class`: `data` (scoped and redacted), `lookup` (small reference table, copied whole), or `skip` (never dumped).
 - `redact`: confirm or correct the suggested transformer (`hash`, `mask`, `null`, `scramble`, `bcrypt:secret`, `fixed:redacted`) for every sensitive column, and replace any `review` placeholder — `dead-drop:check` and the `dead-drop:dump` gate both fail while one is left. `hash`/`mask` only work on string columns and `scramble` only on date/datetime columns; a primary key or reference column can never carry a `redact` entry.
 - `references`: each entry points at `table.column` (or `connection.table.column` for a cross-connection target) with a `descend` flag (`false` means the edge is only followed upward, never down — use it for self-references and audit columns like `created_by`) and a `source` (`fk`, `eloquent`, `guessed`, `manual`) that records how confidently the edge was found.
-- `window` / `exclude`: `window` names a `created_at`-like column for `--since` scoping; `exclude` is a hand-written SQL boolean fragment naming rows to drop from a descending scope. Both only narrow what a *descending* pass collects — an ascended row is never filtered out by either.
+- `window` / `exclude`: `window` names a `created_at`-like column for date scoping; `exclude` is a hand-written SQL boolean fragment naming rows to drop from a descending scope. Both only narrow what a *descending* pass collects — an ascended row is never filtered out by either — and neither is applied by today's whole-database `dead-drop:dump`; they are the contract of the scoped dump that is implemented but not yet exposed as a command.
 
 ### 4. Gate CI on drift
 
@@ -62,19 +62,19 @@ php artisan dead-drop:check [--connection=<name> ...] [--path=<dir>]
 
 Non-interactive, makes no writes, and exits non-zero when the schema and config disagree: a new or removed table, a new or removed column on a reviewed table, a sensitive column with no `redact` entry, or a leftover `review` placeholder. Wire it into CI right after running migrations.
 
-### 5. Dump a redacted, referentially-complete slice
+### 5. Dump the database, redacted
 
 ```bash
-php artisan dead-drop:dump [<table>] [<id> ...] [--all] [--connection=<name>] [--since=<date>] [--dry-run] [--disk=<disk>] [--path=<dir>]
+php artisan dead-drop:dump [--connection=<name>] [--dry-run] [--disk=<disk>] [--path=<dir>]
 ```
 
-The root is an argument, not a spec: `dead-drop:dump companies 1 2`, or `dead-drop:dump companies 1,2`. `--connection=` names the connection the root table lives on — every configured connection is still loaded, because cross-connection references need them — and is inferred when only one connection is configured or the default connection has a config (`Using connection [mysql].`). Anything left out is prompted for in an interactive terminal (connection, table ordered by inbound references, ids, then plan-or-dump); non-interactively nothing is prompted and the missing argument is named instead. A table that is not a `data` or `lookup` table in the config is refused.
+`dead-drop:dump` takes the whole database: every `data` and `lookup` table with rows that is not marked `removed` and the live schema still has, whole. `skip` tables are left out. `window` and `exclude` scope a traversal and this command runs none, so they are not applied — which is exactly what makes the result referentially complete by construction (nothing is traversed, so there are never unresolved references).
 
-`--all` dumps the whole database instead of a slice: every `data` and `lookup` table with rows, whole, on the named connection (or on every configured one when nothing names or infers a single connection). It takes no table or ids — `--all cannot be combined with a table or ids.` — and no `--since`, which is refused outright; `window`, `exclude` and `--since` scope a traversal, and taking every table whole does none, which is exactly what makes the result referentially complete by construction (nothing is traversed, so there are never unresolved references). Time-boxing a whole database is a planned follow-up, not something to work around. The gate, the redaction and the composite-primary-key refusal all apply exactly as they do to a root dump. In an interactive terminal the same thing is offered as the first table choice, `Whole database (every data and lookup table)`.
+`--connection=` names the connection to dump — every configured connection is still loaded, because cross-connection references need them — and is inferred when only one connection is configured or the default connection has a config (`Using connection [mysql].`). Where neither applies, an interactive run asks (`Which connection should be dumped?`) and a non-interactive one dumps every configured connection. A connection whose every table is `skip` is named (`No dumpable tables on connection [x]; skipped.`) and left out rather than failing the run. In an interactive terminal the only other question is `What now?` — plan only, or dump; non-interactively nothing is prompted and the run extracts unless `--dry-run` says otherwise.
 
-`--dry-run` plans without extracting: it prints the row count and estimated size per table plus any unresolved references, and still validates that every root id exists. Without `--dry-run`, the plan is put through a fail-closed gate (schema drift, a redaction salt shorter than 16 characters after resolving `APP_KEY`, invalid `redact` placements, nonexistent root ids) before a single row moves; on success it writes a `manifest.json` (`status: "writing"`), exports every table through the configured `Executor` with each row redacted, flips the manifest to `status: "complete"`, and prints `Artifact: {disk}:{path}/{id}`.
+`--dry-run` plans without extracting: it prints the row count and estimated size per table. Without `--dry-run`, the plan is put through a fail-closed gate (schema drift, a redaction salt shorter than 16 characters after resolving `APP_KEY`, invalid `redact` placements) before a single row moves; on success it writes a `manifest.json` (`status: "writing"`), exports every table through the configured `Executor` with each row redacted, flips the manifest to `status: "complete"`, and prints `Artifact: {disk}:{path}/{id}`. A composite primary key — or no primary key at all — fails the plan before anything is read.
 
-Because the traversal's key sets are temporary tables scoped to one database session, `dead-drop:dump` pins its reads to the write connection: on MySQL the connection needs `CREATE TEMPORARY TABLES`, and a transaction-pooled connection (e.g. PgBouncer in transaction mode) cannot be used.
+Scoped dumps are not exposed: the planner can traverse from a single root row (descending to children, ascending to referenced parents), and that engine is implemented and tested, but no command starts one. Do not tell a consumer they can dump a slice today.
 
 ### 6. List and pull artifacts
 
@@ -104,13 +104,13 @@ Read before executing:
 ## Examples
 
 - A team enabling Dead Drop on a fresh app: publish the config (the redaction salt derives from `APP_KEY` and the disk defaults to `local`, so no configuration is required to get started), run `dead-drop:init --connection=mysql`, review the generated `config/dead-drop/mysql.php` (confirm `redact` entries, fix any `review` placeholders), then add `php artisan dead-drop:check` as a CI step after migrations.
-- Producing a support-ticket slice: `php artisan dead-drop:dump companies 482 --connection=mysql --disk=local` to write a redacted artifact, then `php artisan dead-drop:pull --connection=staging` to load it into a staging database.
-- Refreshing a whole staging database: `php artisan dead-drop:dump --all --connection=mysql`, then `php artisan dead-drop:pull --connection=staging`.
+- Refreshing a staging database: `php artisan dead-drop:dump --connection=mysql --disk=local` to write a redacted artifact, then `php artisan dead-drop:pull --connection=staging` to load it into a staging database.
+- Checking what a dump would contain before writing one: `php artisan dead-drop:dump --connection=mysql --dry-run`.
 - Registering a custom executor from a service provider: inject `DeadDrop\DeadDrop\Extraction\ExecutorManager` and call `$executors->extend('mysqlsh', fn () => new MySqlShellExecutor)`, then select it with `DEAD_DROP_EXECUTOR=mysqlsh`.
 
 ## Anti-patterns
 
-- Do not document native executors (`mysqldump`, `mysqlsh`, `psql`), composite primary keys, or schema creation on the target as available — none of these are implemented.
+- Do not document native executors (`mysqldump`, `mysqlsh`, `psql`), composite primary keys, schema creation on the target, or scoped/root-row dumps as available — none of these are exposed.
 - Do not tell a consumer to configure `binaries.*` for working behavior; it is reserved for native executors and currently does nothing.
 - Do not hand-write a `<connection>.php` config from scratch; always generate it with `dead-drop:init` and then review it.
 - Do not run `dead-drop:pull` against a connection outside `pull.allow_environments`, and never treat it as anything but a full replace of the tables the artifact names.

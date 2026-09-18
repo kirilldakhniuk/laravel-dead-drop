@@ -10,7 +10,7 @@
     <a href="https://packagist.org/packages/kirilldakhniuk/laravel-dead-drop"><img src="https://img.shields.io/packagist/dt/kirilldakhniuk/laravel-dead-drop.svg?style=flat-square" alt="Total Downloads"></a>
 </p>
 
-Dead Drop is a Laravel package that discovers your database schema, builds a reviewed per-connection config describing how each table should be classified, scoped and redacted, detects drift between that config and the live schema, dumps a redacted, referentially-complete slice of a root row — everything it points to or that points at it — or the whole database, to a portable artifact, and pulls that artifact into a local or staging database. Native executors (`mysqldump`, `mysqlsh`, `psql`), composite primary keys and schema creation on the target are not implemented yet. Requires PHP ^8.3, the `zlib` extension (artifacts are gzipped) and Laravel 12 or 13.
+Dead Drop is a Laravel package that discovers your database schema, builds a reviewed per-connection config describing how each table should be classified, scoped and redacted, detects drift between that config and the live schema, dumps the whole database — every table the config does not skip, redacted — to a portable artifact, and pulls that artifact into a local or staging database. Native executors (`mysqldump`, `mysqlsh`, `psql`), composite primary keys and schema creation on the target are not implemented yet. Requires PHP ^8.3, the `zlib` extension (artifacts are gzipped) and Laravel 12 or 13.
 
 ## Installation
 
@@ -52,13 +52,12 @@ This publishes `config/dead-drop.php`:
 ```bash
 php artisan dead-drop:init            # discover the schema, write config/dead-drop/<connection>.php
 php artisan dead-drop:check           # fail-closed drift + redaction gate (use it in CI)
-php artisan dead-drop:dump            # interactive: pick connection, table, ids, plan or dump
-php artisan dead-drop:dump users 1 --dry-run
-php artisan dead-drop:dump --all      # every data and lookup table, whole
+php artisan dead-drop:dump            # every data and lookup table, redacted
+php artisan dead-drop:dump --dry-run  # plan only, extract nothing
 php artisan dead-drop:pull            # interactive: pick the artifact and a target connection
 ```
 
-A real dump works with no configuration at all — see Redaction below for how the salt and disk default. `dead-drop:dump` prompts for anything you do not pass it — the connection, the root table, its ids, and whether to plan or extract — and `dead-drop:pull` does the same for the artifact and the connection to load it into; both ask for nothing at all when they are run non-interactively.
+A real dump works with no configuration at all — see Redaction below for how the salt and disk default. Run in a terminal, `dead-drop:dump` asks which connection to dump when several are configured and whether to plan or extract, and `dead-drop:pull` asks for the artifact and the connection to load it into; both ask for nothing at all when they are run non-interactively.
 
 ## Usage
 
@@ -137,14 +136,14 @@ return [
 Every table entry can hold these keys, and nothing else:
 
 - `class` — one of three values:
-  - `data` — an ordinary table: scoped by the traversal, and redacted per its `redact` entries.
+  - `data` — an ordinary table: dumped whole today, scoped by the traversal once scoped dumps are exposed, and redacted per its `redact` entries either way.
   - `lookup` — a small reference table (a known row estimate of at least one and fewer than 10,000, no outbound reference, no polymorphic pair, nothing sensitive) that is copied whole rather than scoped. Row counts are estimates and every engine reports an unknown one as zero, so a table whose size cannot be established is treated as `data`, not copied whole.
   - `skip` — never dumped. Framework bookkeeping tables (`migrations`, `jobs`, `job_batches`, `failed_jobs`, `cache`, `cache_locks`, `sessions`, `password_reset_tokens`, `password_resets`, `personal_access_tokens`, and anything prefixed `telescope_` or `pulse_`) are skipped automatically; anything else can be forced to `skip` with `--skip=` or by hand-editing the file.
 - `removed` — present (and `true`) only when a table that used to be in this file has since disappeared from the schema. `dead-drop:init` never deletes an entry outright; it marks it `removed` so dropping it from the plan is a deliberate, reviewable edit.
-- `window` — the name of a `created_at`-like column used to scope an incremental dump to rows on or after a `--since` date. `dead-drop:init` fills this in automatically when the table has a `created_at` column.
+- `window` — the name of a `created_at`-like column used to scope a traversal to rows on or after a given date. `dead-drop:init` fills this in automatically when the table has a `created_at` column. Not applied by today's whole-database `dead-drop:dump`; see Scoped dumps below.
 - `exclude` — a raw SQL boolean fragment naming rows to drop from a descending scope, e.g. `"status = 'test'"`. It is applied NULL-safe (a row whose fragment evaluates to `NULL` is kept, not dropped) and wrapped so it cannot escape the query. Never set by `init`; a human writes it.
 
-`exclude` and `window` limit what is collected while descending from the root; they are not filters on the finished dump. A row an ascending pass needs to keep a collected row referentially complete is still pulled in, `exclude` and `window` notwithstanding — otherwise the dump would contain rows pointing at nothing. Use `skip` on the table, or a `redact` entry on the column, when data must be absent absolutely.
+`exclude` and `window` limit what a traversal collects while descending from a root row; they are not filters on the finished dump, and today's whole-database `dead-drop:dump` does not apply them at all (see Scoped dumps below). A row an ascending pass needs to keep a collected row referentially complete is still pulled in, `exclude` and `window` notwithstanding — otherwise the dump would contain rows pointing at nothing. Use `skip` on the table, or a `redact` entry on the column, when data must be absent absolutely.
 - `morph` — `['type' => '<type column>', 'id' => '<id column>']` for an Eloquent-style polymorphic pair (`commentable_type` / `commentable_id`), detected automatically from the `{prefix}_type` / `{prefix}_id` naming convention.
 - `columns` — every column name, in schema order, as of the last `init`. This is what lets `dead-drop:check` detect a column that was added or removed since.
 - `references` — keyed by the referencing column, one entry per outbound foreign-key-like edge. A reference can be written three ways:
@@ -195,57 +194,37 @@ or when a named connection has no config file at all (it tells you to run `dead-
 
 ### Dumping
 
-`dead-drop:dump` plans a referentially-complete row set starting from one root row — or, with `--all`, the whole database — and, unless `--dry-run`, extracts it into a redacted artifact:
+`dead-drop:dump` dumps a database whole — every table the reviewed config classes as `data` or `lookup` — and, unless `--dry-run`, extracts it into a redacted artifact:
 
 ```bash
-php artisan dead-drop:dump companies 1
-php artisan dead-drop:dump companies 1 2 --connection=mysql --dry-run
-php artisan dead-drop:dump --all --connection=mysql
+php artisan dead-drop:dump
+php artisan dead-drop:dump --connection=mysql --dry-run
 ```
 
-- `table` — the table the root row lives in. It must be a `data` or `lookup` table in that connection's config; anything else fails with `Table [x] is not configured for dumping on connection [c].`
-- `ids` — one or more root row ids, as separate arguments (`companies 1 2`) or one comma-separated argument (`companies 1,2`).
-- `--connection=` — the connection holding the root table. Every connection in the config directory is still loaded, because a cross-connection reference needs them; this only says where the traversal starts. Left out, the command uses the only configured connection, or your default connection when that one has a config, and says which it picked (`Using connection [mysql].`).
-- `--since=` — only take rows on or after this date for tables with a `window` column, for a narrower plan.
-- `--all` — dump every `data` and `lookup` table whole instead of a slice; it cannot be combined with a table, ids or `--since`. See below.
+- `--connection=` — the connection to dump. Every connection in the config directory is still loaded, because a cross-connection reference needs them; this only says what the dump covers. Left out, the command uses the only configured connection, or your default connection when that one has a config, and says which it picked (`Using connection [mysql].`); where neither applies it asks, and where there is nobody to ask it dumps every configured connection.
 - `--path=` — config directory. Defaults to `config_path(config('dead-drop.config_path'))`.
 - `--disk=` — disk to write the artifact to. Defaults to `dead-drop.disk` (`DEAD_DROP_DISK`, default `local`).
 - `--dry-run` — plan only; extract nothing.
 
-Run in an interactive terminal, anything you leave out is asked for: which connection (only when several are configured and the default connection has no config), which table (the connection's `data` and `lookup` tables, most-referenced first, as a list or — past fifteen tables — a search box), which ids, and finally whether to plan or extract. Anything you did pass is never asked for, and a run that named its root in full — connection, table and ids — is never asked about the mode either: it dumps unless `--dry-run` says otherwise.
-
-Non-interactively — `--no-interaction`, or anywhere without a terminal — nothing is ever prompted for. A missing piece fails with the argument to pass instead: `Pass a table argument, e.g. dead-drop:dump users 1 --connection=mysql.`, `Pass one or more ids, e.g. dead-drop:dump users 1 --connection=mysql.`, or `Pass --connection=<name>; configured connections: analytics, mysql.`
-
-#### The whole database
-
-`--all` replaces the root: instead of a slice, the dump takes every `data` and `lookup` table whole.
-
-```bash
-php artisan dead-drop:dump --all --connection=mysql
-```
+What the dump contains:
 
 - The scope is every table the connection's config classes as `data` or `lookup`, is not marked `removed`, and the live schema still has. `skip` tables are left out, as are tables with no rows.
-- Every one of them is taken **whole**. `window`, `exclude` and `--since` all scope a traversal, and a whole-database dump does none: they are not applied. `--all --since=` is refused outright — `--all cannot be combined with --since yet; a whole-database dump takes every table whole.` — because narrowing the windowed tables while their children came along whole would leave rows pointing at nothing. Time-boxing a whole database needs a cascading traversal of its own and is a planned follow-up.
+- Every one of them is taken **whole**. `window` and `exclude` scope a traversal, and a whole-database dump runs none: they are not applied.
 - Because every row of every dumped table is taken, the result is referentially complete by construction: nothing is traversed and the plan never has unresolved references to report.
-- `--all` takes no `table` and no `ids`: passing either fails with `--all cannot be combined with a table or ids.`
-- `--connection=` limits the dump to one connection. Without it the usual rule applies — the only configured connection, or your default connection when that one has a config — and where neither applies and nothing can be asked, every configured connection is dumped. A connection whose every table is `skip` is named (`No dumpable tables on connection [x]; skipped.`) and left out rather than failing the run. Note that `dead-drop:pull` refuses an artifact that carries the same bare table name from two connections, so a multi-connection `--all` of schemas that share table names has to be pulled per connection.
-- Everything else is unchanged: the fail-closed extraction gate still runs before a single row moves (there is no root row, so only the root-id check does not apply), every row is still redacted by the same rules, and a table with a composite primary key — or none at all — still fails the plan.
+- A connection whose every table is `skip` is named (`No dumpable tables on connection [x]; skipped.`) and left out rather than failing the run. Note that `dead-drop:pull` refuses an artifact that carries the same bare table name from two connections, so a multi-connection dump of schemas that share table names has to be pulled per connection.
+- The fail-closed extraction gate still runs before a single row moves, every row is still redacted by the same rules, and a table with a composite primary key — or none at all — still fails the plan.
 
-Run in an interactive terminal, the same thing is the first table choice on offer: `Whole database (every data and lookup table)`.
+Run in an interactive terminal, two things are asked: which connection to dump (only when several are configured and the default connection has no config), and then whether to plan or extract. Non-interactively — `--no-interaction`, or anywhere without a terminal — nothing is prompted for and the run extracts unless `--dry-run` says otherwise.
+
+#### Scoped dumps
+
+The planner can also traverse from a single root row: descending to every child row that points at it (honouring `descend`, `window`, `exclude` and Eloquent-style polymorphic pairs) and then ascending to every row a collected row references, to a fixed point, so the slice is referentially complete. That engine is fully implemented and tested — it is simply not exposed as a command yet, so today `dead-drop:dump` means the whole database and nothing else. The `references`, `descend`, `window`, `exclude` and `morph` keys `dead-drop:init` writes and `dead-drop:check` verifies are its contract, which is why they are still generated and documented.
 
 #### Planning
 
-Both a dry run and a real dump start by planning: the traversal holds its key sets in temporary tables, which only exist on the session that created them, so `dead-drop:dump` pins its reads to the write connection for the duration of the run (on MySQL this also means the connection needs the `CREATE TEMPORARY TABLES` privilege, and on any driver a transaction-pooled connection, e.g. PgBouncer in transaction mode, cannot be used — the temporary tables would not survive between statements).
+Both a dry run and a real dump start by planning: every dumpable table the schema still has is counted, and the plan is printed as a table of connection, table, row count and estimated size, followed by the total row count, total estimated size, and the unresolved references (always none — there is no traversal to leave any). A table with a composite primary key, or no primary key at all, cannot be addressed by a dump and makes the whole plan fail with a clear error before anything is read.
 
-The plan is printed as a table of connection, table, row count and estimated size, followed by the total row count, total estimated size, and any unresolved references. In plain words, the traversal:
-
-- **descends** from the root: for every row it holds, it follows every `references` edge that has `descend: true` (the default) down to the child rows that point at it — breadth-first, re-visiting a table whenever it grows, so a self-reference or a second inbound edge still gets its own children collected. A `window` and `--since` narrow which child rows a descending pass takes; an `exclude` fragment removes rows the config names, NULL-safe. Polymorphic children are found by reading a table's distinct `*_type` values and resolving each one to a table via Laravel's morph map (or the class name itself);
-- **ascends** afterward: every collected row's own outbound references (`descend: false` included) are followed upward to pull in the row it points at, repeated to a fixed point so a newly-ascended row's own parents are pulled in too. This is what keeps the dump referentially complete — a row is never left pointing at nothing;
-- **lookup**-class tables are copied whole up front and never descended into;
-- a reference an ascending pass cannot follow — because its target table is not configured, is `skip`ped, has no single-column primary key, or (for a declared edge) the target column is not that table's primary key — is recorded as an **unresolved reference** with a reason, but only once some collected row actually carries a non-null value in that column; an edge nothing ever points along is never reported, and never fails the plan. A polymorphic column whose type value resolves to nothing (an old value no model answers to any more) or names a table not configured for the dump is recorded the same way;
-- a table with a composite primary key, or no primary key at all, cannot be addressed by this scheme and makes the whole plan fail with a clear error before anything is traversed.
-
-`--dry-run` stops here, after checking that every root id exists (an id that does not is reported as `Root id {id} does not exist in {connection}.{table}` and fails the command).
+`--dry-run` stops here.
 
 #### Extraction
 
@@ -257,7 +236,7 @@ Without `--dry-run`, the plan is put through the extraction gate before a single
 4. flip the manifest's `status` to `"complete"`;
 5. print the plan table, totals and unresolved references (as above), followed by `Artifact: {disk}:{path}/{id}`.
 
-A `QueryException` during extraction — a hand-written `exclude` fragment, or a `window` column that turns out not to be one — is reported as `Extraction failed: {message}` and exits 1, leaving the manifest at `status: "writing"`; `dead-drop:dumps` (below) flags it and `dead-drop:pull` refuses to load it.
+A `QueryException` during extraction — a table the connection turns out not to be allowed to read, say — is reported as `Extraction failed: {message}` and exits 1, leaving the manifest at `status: "writing"`; `dead-drop:dumps` (below) flags it and `dead-drop:pull` refuses to load it.
 
 **Phase boundary:** native executors and composite primary keys are not implemented in this phase.
 
@@ -283,7 +262,7 @@ Rules enforced before any row moves — the extraction gate — cover:
 1. schema drift on any connection in the plan (the same checks `dead-drop:check` makes: new/removed tables or columns, undecided sensitive or JSON columns, a leftover `review` placeholder);
 2. a resolved redaction salt shorter than 16 characters — an explicit `DEAD_DROP_REDACTION_SALT` that is itself too short (`redaction.salt must be at least 16 characters (DEAD_DROP_REDACTION_SALT)`), or nothing resolved at all because both it and `APP_KEY` are empty (`redaction.salt is not set and APP_KEY is empty; set DEAD_DROP_REDACTION_SALT (generate one with: openssl rand -hex 16)`);
 3. invalid redaction placements — `null` on a `NOT NULL` column, `scramble` on anything but a `date`, `datetime` or `timestamp` column (a `time` or `year` column carries no date to shift), `hash`/`mask` on anything but a string column, a truncated `hash` on a unique-indexed column whose declared length cannot keep it distinct (at least 32 characters, or enough to hold the full email form on an email-shaped column), a `hash` on an email-shaped column too narrow to hold `{8 hex}@{email_domain}`, any entry on a primary key or a reference column, or an unknown transformer name — each reported against the column it names;
-4. root ids that do not exist in the root table.
+4. root ids that do not exist in the root table — a check only a scoped dump can fail, since a whole-database dump starts from no row at all.
 
 There is no bypass flag: every category runs and every violation is collected, so `dead-drop:dump` prints everything wrong in one pass. Primary key columns and reference (foreign-key-like) columns can never carry a `redact` entry at all.
 

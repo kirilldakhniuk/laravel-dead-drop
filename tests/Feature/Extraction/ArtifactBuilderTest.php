@@ -59,7 +59,7 @@ it('records a sqlite database by its file name, not its path', function () {
     SchemaBuilder::migrate('dd_test');
     SchemaBuilder::seedTwoCompanies('dd_test');
 
-    $id = dumpFixture('dd_test.companies:1');
+    $id = dumpFixture();
     $manifest = (new ArtifactReader(Storage::disk('local'), 'dead-drops'))->manifest($id);
 
     // The directories above the file are the machine the dump ran on, and an

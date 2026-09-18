@@ -27,18 +27,18 @@ it('refuses to run outside the allowed environments', function () {
 });
 
 it('loads the newest complete artifact into the target with --force', function () {
-    dumpFixture('dd_test.companies:1', initFixtureConfig());
+    dumpFixture(initFixtureConfig());
 
     $this->artisan('dead-drop:pull', ['--connection' => 'dd_target', '--disk' => 'local', '--force' => true])
         ->expectsOutputToContain('dd_test.orders')
         ->expectsOutputToContain('Loaded')
         ->assertSuccessful();
 
-    expect(DB::connection('dd_target')->table('orders')->count())->toBe(2);
+    expect(DB::connection('dd_target')->table('orders')->count())->toBe(3);
 });
 
 it('asks for confirmation and aborts on no', function () {
-    dumpFixture('dd_test.companies:1', initFixtureConfig());
+    dumpFixture(initFixtureConfig());
     $id = latestArtifactId();
     $count = count((new ArtifactReader(Storage::disk('local'), 'dead-drops'))->manifest($id)->tables);
 
@@ -55,7 +55,7 @@ it('refuses an incomplete artifact and reports when none exists', function () {
         ->expectsOutputToContain('No complete artifact found on local:dead-drops. Run dead-drop:dump first.')
         ->assertFailed();
 
-    $id = dumpFixture('dd_test.companies:1', initFixtureConfig());
+    $id = dumpFixture(initFixtureConfig());
     $path = 'dead-drops/'.$id.'/manifest.json';
     Storage::disk('local')->put($path, str_replace('"complete"', '"writing"', Storage::disk('local')->get($path)));
 
@@ -65,16 +65,16 @@ it('refuses an incomplete artifact and reports when none exists', function () {
 });
 
 it('runs the configured after hooks with the report', function () {
-    dumpFixture('dd_test.companies:1', initFixtureConfig());
+    dumpFixture(initFixtureConfig());
     config()->set('dead-drop.pull.after', [RecordingAfterHook::class]);
 
     $this->artisan('dead-drop:pull', ['--connection' => 'dd_target', '--disk' => 'local', '--force' => true])->assertSuccessful();
 
-    expect(RecordingAfterHook::$report?->loaded['dd_test.orders'])->toBe(2);
+    expect(RecordingAfterHook::$report?->loaded['dd_test.orders'])->toBe(3);
 });
 
 it('runs an artisan command after hook and streams its output', function () {
-    $id = dumpFixture('dd_test.companies:1', initFixtureConfig());
+    $id = dumpFixture(initFixtureConfig());
     config()->set('dead-drop.pull.after', ['dead-drop:dumps --disk=local']);
 
     // `Root` is a column header only `dead-drop:dumps` prints, so seeing it
@@ -86,7 +86,7 @@ it('runs an artisan command after hook and streams its output', function () {
 });
 
 it('fails clearly when an after hook cannot be resolved', function () {
-    dumpFixture('dd_test.companies:1', initFixtureConfig());
+    dumpFixture(initFixtureConfig());
     config()->set('dead-drop.pull.after', ['App\\Hooks\\Missing']);
 
     // The rows are already in the target, so the summary has to be on screen
@@ -97,11 +97,11 @@ it('fails clearly when an after hook cannot be resolved', function () {
         ->expectsOutputToContain('The artifact was loaded; only the after hook failed.')
         ->assertFailed();
 
-    expect(DB::connection('dd_target')->table('orders')->count())->toBe(2);
+    expect(DB::connection('dd_target')->table('orders')->count())->toBe(3);
 });
 
 it('requires --force when non-interactive', function () {
-    dumpFixture('dd_test.companies:1', initFixtureConfig());
+    dumpFixture(initFixtureConfig());
 
     $this->artisan('dead-drop:pull', ['--connection' => 'dd_target', '--disk' => 'local', '--no-interaction' => true])
         ->expectsOutputToContain('Pass --force to load without confirmation when running non-interactively.')
@@ -111,18 +111,18 @@ it('requires --force when non-interactive', function () {
 });
 
 it('uses the default connection when non-interactive with --force', function () {
-    dumpFixture('dd_test.companies:1', initFixtureConfig());
+    dumpFixture(initFixtureConfig());
     config()->set('database.default', 'dd_target');
 
     $this->artisan('dead-drop:pull', ['--disk' => 'local', '--no-interaction' => true, '--force' => true])
         ->expectsOutputToContain('Loaded')
         ->assertSuccessful();
 
-    expect(DB::connection('dd_target')->table('orders')->count())->toBe(2);
+    expect(DB::connection('dd_target')->table('orders')->count())->toBe(3);
 });
 
 it('names the database the target connection is open on, not the one the config now says', function () {
-    $id = dumpFixture('dd_test.companies:1', initFixtureConfig());
+    $id = dumpFixture(initFixtureConfig());
     $count = count((new ArtifactReader(Storage::disk('local'), 'dead-drops'))->manifest($id)->tables);
 
     // The connection is already resolved, so a config key edited behind it is
@@ -137,7 +137,7 @@ it('names the database the target connection is open on, not the one the config 
 });
 
 it('loads into the connection the artifact was dumped from and warns', function () {
-    $id = dumpFixture('dd_test.companies:1', initFixtureConfig());
+    $id = dumpFixture(initFixtureConfig());
     $manifest = (new ArtifactReader(Storage::disk('local'), 'dead-drops'))->manifest($id);
 
     $this->artisan('dead-drop:pull', ['--connection' => 'dd_test', '--disk' => 'local', '--force' => true])
@@ -156,7 +156,7 @@ it('loads into the connection the artifact was dumped from and warns', function 
 });
 
 it('mentions a matching source database name in the confirmation', function () {
-    $id = dumpFixture('dd_test.companies:1', initFixtureConfig());
+    $id = dumpFixture(initFixtureConfig());
     $count = count((new ArtifactReader(Storage::disk('local'), 'dead-drops'))->manifest($id)->tables);
 
     $this->artisan('dead-drop:pull', ['--connection' => 'dd_test', '--disk' => 'local'])
@@ -170,7 +170,7 @@ it('mentions a matching source database name in the confirmation', function () {
 });
 
 it('refuses an unknown target connection', function () {
-    dumpFixture('dd_test.companies:1', initFixtureConfig());
+    dumpFixture(initFixtureConfig());
 
     $this->artisan('dead-drop:pull', ['--connection' => 'nope', '--disk' => 'local', '--force' => true])
         ->expectsOutputToContain('Unknown database connection [nope]')
@@ -179,8 +179,8 @@ it('refuses an unknown target connection', function () {
 
 it('prompts for the artifact and the target connection when run bare', function () {
     $path = initFixtureConfig();
-    dumpFixture('dd_test.companies:1', $path);
-    dumpFixture('dd_test.companies:2', $path);
+    dumpFixture($path);
+    dumpFixture($path);
 
     // Only the fixture connections are configured, so the choice list is
     // every one of them rather than whatever Testbench ships.
@@ -220,9 +220,9 @@ it('prompts for the artifact and the target connection when run bare', function 
 
 it('does not offer incomplete artifacts and says so', function () {
     $path = initFixtureConfig();
-    dumpFixture('dd_test.companies:1', $path);
-    dumpFixture('dd_test.companies:2', $path);
-    dumpFixture('dd_test.companies:1', $path);
+    dumpFixture($path);
+    dumpFixture($path);
+    dumpFixture($path);
 
     $reader = new ArtifactReader(Storage::disk('local'), 'dead-drops');
     [$newest, $writing, $oldest] = $reader->ids();

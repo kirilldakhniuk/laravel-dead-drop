@@ -20,7 +20,7 @@ beforeEach(function () {
 it('reports row counts per table', function () {
     $path = initFixtureConfig();
 
-    $this->artisan('dead-drop:dump', ['table' => 'companies', 'ids' => ['1'], '--connection' => 'dd_test', '--path' => $path, '--dry-run' => true])
+    $this->artisan('dead-drop:dump', ['--connection' => 'dd_test', '--path' => $path, '--dry-run' => true])
         ->expectsOutputToContain('orders')
         ->expectsOutputToContain('order_items')
         ->expectsOutputToContain('Total rows')
@@ -41,15 +41,6 @@ it('orders parents before children', function () {
         ->and(array_search('users', $tables))->toBeLessThan(array_search('orders', $tables));
 });
 
-it('reports unresolved references', function () {
-    $path = initFixtureConfig();
-
-    $this->artisan('dead-drop:dump', ['table' => 'companies', 'ids' => ['1'], '--connection' => 'dd_test', '--path' => $path, '--dry-run' => true])
-        ->expectsOutputToContain('Unresolved references')
-        ->expectsOutputToContain('users.failed_job_id')
-        ->assertSuccessful();
-});
-
 it('refuses a table with a composite primary key', function () {
     Schema::connection('dd_test')->create('tag_post', function ($t) {
         $t->unsignedBigInteger('tag_id');
@@ -58,7 +49,7 @@ it('refuses a table with a composite primary key', function () {
     });
     $path = initFixtureConfig();
 
-    $this->artisan('dead-drop:dump', ['table' => 'companies', 'ids' => ['1'], '--connection' => 'dd_test', '--path' => $path, '--dry-run' => true])
+    $this->artisan('dead-drop:dump', ['--connection' => 'dd_test', '--path' => $path, '--dry-run' => true])
         ->expectsOutputToContain('composite primary key')
         ->assertFailed();
 });
@@ -67,41 +58,18 @@ it('writes no files and leaves no key tables behind', function () {
     Storage::fake('s3');
     $path = initFixtureConfig();
 
-    $this->artisan('dead-drop:dump', ['table' => 'companies', 'ids' => ['1'], '--connection' => 'dd_test', '--path' => $path, '--dry-run' => true]);
+    $this->artisan('dead-drop:dump', ['--connection' => 'dd_test', '--path' => $path, '--dry-run' => true]);
 
     expect(Storage::disk('s3')->allFiles())->toBe([])
         ->and(collect(Schema::connection('dd_test')->getTables())->pluck('name')->filter(fn ($n) => str_starts_with($n, 'dd_keys_'))->all())->toBe([]);
 });
 
-it('fails clearly when a hand written exclude fragment is not valid SQL', function () {
-    $path = initFixtureConfig();
-    $file = $path.'/dd_test.php';
-
-    file_put_contents($file, str_replace(
-        "'window' => 'created_at',",
-        "'window' => 'created_at',\n        'exclude' => 'this is not sql',",
-        (string) file_get_contents($file),
-    ));
-
-    $this->artisan('dead-drop:dump', ['table' => 'companies', 'ids' => ['1'], '--connection' => 'dd_test', '--path' => $path, '--dry-run' => true])
-        ->expectsOutputToContain('Planning failed')
-        ->assertFailed();
-});
-
-it('refuses a dry run whose root id does not exist', function () {
-    $path = initFixtureConfig();
-
-    $this->artisan('dead-drop:dump', ['table' => 'companies', 'ids' => ['999'], '--connection' => 'dd_test', '--path' => $path, '--dry-run' => true])
-        ->expectsOutputToContain('Root id 999 does not exist in dd_test.companies')
-        ->assertFailed();
-});
-
-it('plans every data and lookup table whole with --all', function () {
+it('plans every data and lookup table whole', function () {
     $path = initFixtureConfig();
 
     // The plan table and the row counts share one line each, so the rendered
     // output is asserted directly rather than through output expectations.
-    Artisan::call('dead-drop:dump', ['--all' => true, '--connection' => 'dd_test', '--path' => $path, '--dry-run' => true]);
+    Artisan::call('dead-drop:dump', ['--connection' => 'dd_test', '--path' => $path, '--dry-run' => true]);
     $output = Artisan::output();
 
     expect($output)->toMatch('/companies\s*\|\s*2\s*\|/')
@@ -113,25 +81,6 @@ it('plans every data and lookup table whole with --all', function () {
         ->not->toContain('comments')
         // Every row of every table is taken, so nothing can be left dangling.
         ->toContain('Unresolved references (0):');
-});
-
-it('refuses --all together with --since', function () {
-    $path = initFixtureConfig();
-
-    // Narrowing the windowed tables while their children came along whole
-    // would leave rows pointing at nothing, which is the one thing a dump
-    // must never write.
-    $this->artisan('dead-drop:dump', ['--all' => true, '--since' => '2026-06-01', '--connection' => 'dd_test', '--path' => $path, '--dry-run' => true])
-        ->expectsOutputToContain('--all cannot be combined with --since yet; a whole-database dump takes every table whole.')
-        ->assertFailed();
-});
-
-it('refuses --all together with a table or ids', function () {
-    $path = initFixtureConfig();
-
-    $this->artisan('dead-drop:dump', ['table' => 'companies', 'ids' => ['1'], '--all' => true, '--connection' => 'dd_test', '--path' => $path, '--dry-run' => true])
-        ->expectsOutputToContain('--all cannot be combined with a table or ids.')
-        ->assertFailed();
 });
 
 it('names a connection with nothing to dump and plans the rest', function () {
@@ -146,12 +95,12 @@ it('names a connection with nothing to dump and plans the rest', function () {
 
     // Every table skipped is a reviewed decision, not a reason to fail a run
     // that asked for whatever there is.
-    $this->artisan('dead-drop:dump', ['--all' => true, '--connection' => 'dd_test', '--path' => $path, '--dry-run' => true, '--no-interaction' => true])
+    $this->artisan('dead-drop:dump', ['--connection' => 'dd_test', '--path' => $path, '--dry-run' => true, '--no-interaction' => true])
         ->expectsOutputToContain('No dumpable tables on connection [dd_test]; skipped.')
         ->assertSuccessful();
 });
 
-it('covers every configured connection when --all can name none', function () {
+it('covers every configured connection when none can be named', function () {
     SchemaBuilder::migrate('dd_analytics');
     SchemaBuilder::seedTwoCompanies('dd_analytics');
     $path = tempDirectory();
@@ -159,8 +108,8 @@ it('covers every configured connection when --all can name none', function () {
     config()->set('database.default', 'sqlite');
 
     // Nothing names a connection, none of them is the default, and there is
-    // no terminal to ask: `--all` means all of them rather than a failure.
-    Artisan::call('dead-drop:dump', ['--all' => true, '--path' => $path, '--dry-run' => true, '--no-interaction' => true]);
+    // no terminal to ask: the dump covers all of them rather than failing.
+    Artisan::call('dead-drop:dump', ['--path' => $path, '--dry-run' => true, '--no-interaction' => true]);
     $output = Artisan::output();
 
     expect($output)->toContain('dd_analytics')

@@ -63,20 +63,20 @@ function artifactLabel(Manifest $manifest): string
 }
 
 /**
- * Runs a real (non dry-run) dump of the fixture connection and returns the id
- * of the artifact it wrote. The caller must have called `fakeArtifactDisk()`.
+ * Runs a real (non dry-run) whole-database dump of a fixture connection and
+ * returns the id of the artifact it wrote. The caller must have called
+ * `fakeArtifactDisk()`. A scripted dump is never asked whether to plan or to
+ * extract, so it extracts.
  */
-function dumpFixture(string $root = 'dd_test.companies:1', ?string $configDirectory = null): string
+function dumpFixture(?string $configDirectory = null, string $connection = 'dd_test'): string
 {
     $directory = $configDirectory ?? initFixtureConfig();
-    $parsed = Root::parse($root);
 
     test()->artisan('dead-drop:dump', [
-        'table' => $parsed->table,
-        'ids' => array_map('strval', $parsed->ids),
-        '--connection' => $parsed->connection,
+        '--connection' => $connection,
         '--path' => $directory,
         '--disk' => 'local',
+        '--no-interaction' => true,
     ])->assertSuccessful();
 
     return latestArtifactId();

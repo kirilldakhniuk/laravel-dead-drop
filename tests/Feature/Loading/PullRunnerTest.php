@@ -28,32 +28,31 @@ function pullFixtureArtifact(string $id): PullReport
 }
 
 it('loads every table of the artifact into the target in manifest order', function () {
-    $id = dumpFixture('dd_test.companies:1', initFixtureConfig());
+    $id = dumpFixture(initFixtureConfig());
 
     $report = pullFixtureArtifact($id);
 
-    expect($report->loaded['dd_test.orders'])->toBe(2)
-        ->and(DB::connection('dd_target')->table('orders')->orderBy('id')->pluck('id')->all())->toBe([1, 2])
-        ->and(DB::connection('dd_target')->table('orders')->where('id', 99)->exists())->toBeFalse()
+    expect($report->loaded['dd_test.orders'])->toBe(3)
+        ->and(DB::connection('dd_target')->table('orders')->orderBy('id')->pluck('id')->all())->toBe([1, 2, 99])
         ->and(DB::connection('dd_target')->table('users')->where('id', 10)->value('email'))->toMatch('/^[0-9a-f]{16}@example\.test$/')
         ->and(DB::connection('dd_target')->table('companies')->where('id', 1)->value('stripe_id'))->toBe('redacted')
         ->and(array_keys($report->loaded)[0])->toBe('dd_test.companies');
 });
 
 it('replaces rows on a second pull instead of duplicating them', function () {
-    $id = dumpFixture('dd_test.companies:1', initFixtureConfig());
+    $id = dumpFixture(initFixtureConfig());
     DB::connection('dd_target')->table('companies')->insert(['id' => 1, 'name' => 'Stale', 'stripe_id' => null]);
     DB::connection('dd_target')->table('orders')->insert(['id' => 777, 'company_id' => 1, 'user_id' => 10, 'customer_id' => null, 'total' => 1, 'created_at' => null]);
 
     pullFixtureArtifact($id);
     pullFixtureArtifact($id);
 
-    expect(DB::connection('dd_target')->table('orders')->count())->toBe(2)
+    expect(DB::connection('dd_target')->table('orders')->count())->toBe(3)
         ->and(DB::connection('dd_target')->table('orders')->where('id', 777)->exists())->toBeFalse();
 });
 
 it('skips and names a table missing on the target', function () {
-    $id = dumpFixture('dd_test.companies:1', initFixtureConfig());
+    $id = dumpFixture(initFixtureConfig());
     Schema::connection('dd_target')->drop('order_items');
 
     $report = pullFixtureArtifact($id);
@@ -63,7 +62,7 @@ it('skips and names a table missing on the target', function () {
 });
 
 it('refuses before writing when a target column is missing', function () {
-    $id = dumpFixture('dd_test.companies:1', initFixtureConfig());
+    $id = dumpFixture(initFixtureConfig());
     Schema::connection('dd_target')->table('users', fn ($t) => $t->dropColumn('password'));
 
     expect(fn () => pullFixtureArtifact($id))->toThrow(RuntimeException::class, 'Target table [users] is missing columns: password')
@@ -71,7 +70,7 @@ it('refuses before writing when a target column is missing', function () {
 });
 
 it('rolls a table back on a row count mismatch and restores foreign key checks', function () {
-    $id = dumpFixture('dd_test.companies:1', initFixtureConfig());
+    $id = dumpFixture(initFixtureConfig());
     $reader = new ArtifactReader(Storage::disk('local'), 'dead-drops');
     $manifest = $reader->manifest($id);
     $tables = array_map(fn (TableManifest $t) => $t->table === 'orders' ? new TableManifest($t->connection, $t->table, $t->file, $t->format, 5, $t->bytes, $t->primaryKey, $t->columns, $t->redacted) : $t, $manifest->tables);
@@ -100,7 +99,7 @@ it('refuses a format it has no loader for before writing anything', function () 
 });
 
 it('refuses before writing when the target needs a column the artifact has no value for', function () {
-    $id = dumpFixture('dd_test.companies:1', initFixtureConfig());
+    $id = dumpFixture(initFixtureConfig());
 
     // SQLite cannot ALTER a NOT NULL column in, so the target table is
     // rebuilt with one the dump knows nothing about.
@@ -113,7 +112,7 @@ it('refuses before writing when the target needs a column the artifact has no va
 });
 
 it('names the table when the target refuses a row, without echoing the row', function () {
-    $id = dumpFixture('dd_test.companies:1', initFixtureConfig());
+    $id = dumpFixture(initFixtureConfig());
 
     // A CHECK the target has and the source did not: the engine's message
     // names the constraint, never which table was being loaded.
@@ -166,9 +165,9 @@ it('lets the target recompute a generated column instead of inserting it', funct
     DB::connection('dd_test')->table('gen')->insert([['id' => 1, 'a' => 10], ['id' => 2, 'a' => 20]]);
     generatedTable('dd_target', 'a * 3');
 
-    $report = pullFixtureArtifact(dumpFixture('dd_test.gen:1', initFixtureConfig()));
+    $report = pullFixtureArtifact(dumpFixture(initFixtureConfig()));
 
-    expect($report->loaded['dd_test.gen'])->toBe(1)
+    expect($report->loaded['dd_test.gen'])->toBe(2)
         ->and(DB::connection('dd_target')->table('gen')->where('id', 1)->value('a'))->toBe(10)
         // 30, not the 20 the artifact carries: the target computed it.
         ->and(DB::connection('dd_target')->table('gen')->where('id', 1)->value('b'))->toBe(30);
@@ -179,7 +178,7 @@ it('does not require a value for a generated column the artifact does not carry'
     DB::connection('dd_test')->table('gen')->insert([['id' => 1, 'a' => 10]]);
     generatedTable('dd_target', 'a * 3');
 
-    $report = pullFixtureArtifact(dumpFixture('dd_test.gen:1', initFixtureConfig()));
+    $report = pullFixtureArtifact(dumpFixture(initFixtureConfig()));
 
     expect($report->loaded['dd_test.gen'])->toBe(1)
         ->and(DB::connection('dd_target')->table('gen')->where('id', 1)->value('b'))->toBe(30);

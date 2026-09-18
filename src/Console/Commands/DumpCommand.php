@@ -4,20 +4,17 @@ declare(strict_types=1);
 
 namespace DeadDrop\DeadDrop\Console\Commands;
 
-use DateMalformedStringException;
-use DateTimeImmutable;
 use DeadDrop\DeadDrop\Artifacts\Manifest;
 use DeadDrop\DeadDrop\Config\ConfigLoader;
 use DeadDrop\DeadDrop\Config\ConfigSet;
 use DeadDrop\DeadDrop\Console\Commands\Concerns\FormatsBytes;
 use DeadDrop\DeadDrop\Console\Commands\Concerns\ResolvesArtifactLocation;
-use DeadDrop\DeadDrop\Console\Commands\Concerns\ResolvesDumpRoot;
+use DeadDrop\DeadDrop\Console\Commands\Concerns\ResolvesDumpConnection;
 use DeadDrop\DeadDrop\Extraction\ArtifactBuilder;
 use DeadDrop\DeadDrop\Extraction\ExtractionGate;
 use DeadDrop\DeadDrop\Extraction\TableArtifact;
 use DeadDrop\DeadDrop\Planning\CircularConnectionException;
 use DeadDrop\DeadDrop\Planning\ExtractionPlan;
-use DeadDrop\DeadDrop\Planning\KeySetRepository;
 use DeadDrop\DeadDrop\Planning\Planner;
 use DeadDrop\DeadDrop\Planning\PlanStep;
 use DeadDrop\DeadDrop\Planning\Root;
@@ -33,10 +30,16 @@ use InvalidArgumentException;
 use RuntimeException;
 
 /**
- * Dumps a root row set — or, with `--all`, every dumpable table whole: it
- * plans what the dump contains, puts that plan past the extraction gate, and
- * — unless `--dry-run` — hands it to the executor that writes the redacted
- * artifact.
+ * Dumps a database whole: every table the reviewed config marks `data` or
+ * `lookup`. It plans what the dump contains, puts that plan past the
+ * extraction gate, and — unless `--dry-run` — hands it to the executor that
+ * writes the redacted artifact.
+ *
+ * Taking every table whole is referentially complete by construction, so
+ * nothing is traversed and there is nothing to narrow: `window`, `exclude`
+ * and a root row all scope a traversal, and this command runs none. The
+ * planner can still traverse from a single root row; that is not exposed as
+ * a command yet.
  *
  * The command composes the config, schema, planning and extraction layers and
  * prints what they answer; it decides nothing about the plan itself.
@@ -45,26 +48,25 @@ final class DumpCommand extends Command
 {
     use FormatsBytes;
     use ResolvesArtifactLocation;
-    use ResolvesDumpRoot;
+    use ResolvesDumpConnection;
 
     /** @var string */
-    protected $signature = 'dead-drop:dump {table? : Root table} {ids?* : One or more root row ids} {--connection= : Connection holding the root table} {--all : Dump every data and lookup table whole} {--since= : Only rows on or after this date for windowed tables} {--dry-run : Plan only, extract nothing} {--disk= : Disk to write the artifact to (defaults to dead-drop.disk)} {--path= : Config directory}';
+    protected $signature = 'dead-drop:dump {--connection= : Connection to dump (prompted when several are configured)} {--dry-run : Plan only, extract nothing} {--disk= : Disk to write the artifact to (defaults to dead-drop.disk)} {--path= : Config directory}';
 
     /** @var string */
-    protected $description = 'Dump a redacted, referentially complete slice of a root row set';
+    protected $description = 'Dump every data and lookup table of a connection as a redacted artifact';
 
-    public function handle(Planner $planner, ConfigLoader $loader, Introspector $introspector, KeySetRepository $keys, ExtractionGate $gate, ArtifactBuilder $builder, RedactionContext $context): int
+    public function handle(Planner $planner, ConfigLoader $loader, Introspector $introspector, ExtractionGate $gate, ArtifactBuilder $builder, RedactionContext $context): int
     {
         try {
             $config = $loader->loadAll($this->directory());
-            $since = $this->since();
-        } catch (InvalidArgumentException|DateMalformedStringException $e) {
+        } catch (InvalidArgumentException $e) {
             $this->error($e->getMessage());
 
             return self::FAILURE;
         }
 
-        $root = $this->resolveRoot($config);
+        $root = $this->dumpRoot($config);
 
         if ($root === null) {
             return self::FAILURE;
@@ -75,37 +77,32 @@ final class DumpCommand extends Command
 
         try {
             $schemas = $this->schemas($config, $introspector);
-            $plan = $root->isFull()
-                ? $planner->planFull($config, $schemas, $root->scope())
-                : $planner->plan($root, $config, $schemas, $since);
-
-            // A dry run reads nothing out of the tables it plans, so only the
-            // root ids have to hold; an extraction has to clear the whole gate.
-            $violations = $dryRun
-                ? $gate->rootIds($root, $config, $schemas)
-                : $gate->check($root, $config, $schemas, $context->salt, $this->configuredSalt())->lines();
-
-            if ($violations !== []) {
-                foreach ($violations as $violation) {
-                    $this->error($violation);
-                }
-
-                return self::FAILURE;
-            }
-
+            $plan = $planner->planFull($config, $schemas, $root->scope());
             $manifest = null;
 
+            // A dry run reads nothing out of the tables it plans; an
+            // extraction has to clear the whole gate first.
             if (! $dryRun) {
+                $violations = $gate->check($root, $config, $schemas, $context->salt, $this->configuredSalt())->lines();
+
+                if ($violations !== []) {
+                    foreach ($violations as $violation) {
+                        $this->error($violation);
+                    }
+
+                    return self::FAILURE;
+                }
+
                 $phase = 'Extraction';
-                $manifest = $this->extract($builder, $plan, $root, $since, $config, $schemas, $context);
+                $manifest = $this->extract($builder, $plan, $root, $config, $schemas, $context);
             }
         } catch (UnsupportedTableException|CircularConnectionException|InvalidArgumentException $e) {
             $this->error($e->getMessage());
 
             return self::FAILURE;
         } catch (QueryException $e) {
-            // A hand-written `exclude` fragment or a window column that is not
-            // one reaches the database as-is; the operator gets the engine's
+            // A table the engine refuses to read — a permission the run does
+            // not have, a view behind a broken definition — gets the engine's
             // complaint rather than a stack trace, and the phase that produced
             // it rather than a guess.
             $this->error("{$phase} failed: {$e->getMessage()}");
@@ -115,11 +112,6 @@ final class DumpCommand extends Command
             $this->error($e->getMessage());
 
             return self::FAILURE;
-        } finally {
-            // The plan is read out of temporary key tables, and the extraction
-            // joins them, so they outlive both and only the caller can clean
-            // them up.
-            $keys->dropAll();
         }
 
         $this->report($plan);
@@ -131,12 +123,13 @@ final class DumpCommand extends Command
         return self::SUCCESS;
     }
 
-    private function extract(ArtifactBuilder $builder, ExtractionPlan $plan, Root $root, ?DateTimeImmutable $since, ConfigSet $config, SchemaSet $schemas, RedactionContext $context): Manifest
+    private function extract(ArtifactBuilder $builder, ExtractionPlan $plan, Root $root, ConfigSet $config, SchemaSet $schemas, RedactionContext $context): Manifest
     {
         return $builder->build(
             $plan,
             $root,
-            $since,
+            // Every table is taken whole, so there is no date to narrow by.
+            null,
             $config,
             $schemas,
             $context,
@@ -158,16 +151,6 @@ final class DumpCommand extends Command
 
         /** @var array<string, DatabaseSchema> $schemas */
         return new SchemaSet($schemas);
-    }
-
-    /**
-     * @throws DateMalformedStringException
-     */
-    private function since(): ?DateTimeImmutable
-    {
-        $since = $this->option('since');
-
-        return is_string($since) && $since !== '' ? new DateTimeImmutable($since) : null;
     }
 
     private function report(ExtractionPlan $plan): void

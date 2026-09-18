@@ -65,7 +65,7 @@ final class DumpsCommand extends Command
             ];
         }
 
-        $this->table(['Id', 'Created', 'Root', 'Status', 'Tables', 'Rows', 'Size'], $rows);
+        $this->table(['Id', 'Created', 'Source', 'Status', 'Tables', 'Rows', 'Size'], $rows);
 
         return self::SUCCESS;
     }

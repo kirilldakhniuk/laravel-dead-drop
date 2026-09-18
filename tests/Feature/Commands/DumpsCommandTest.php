@@ -32,9 +32,11 @@ it('lists artifacts newest first', function () {
     expect($ids)->toHaveCount(2)
         ->and($exitCode)->toBe(0)
         ->and($output)->toContain('complete')
-        // The root is listed by what it covers, not as the manifest's
-        // storage spec.
-        ->toContain('whole database (dd_test)')
+        // A dump is listed by the connection it came from, not as the
+        // manifest's storage spec.
+        ->toContain('| dd_test ')
+        ->not->toContain('whole database')
+        ->not->toContain('dd_test:*')
         ->and(strpos($output, $ids[0]))->toBeLessThan(strpos($output, $ids[1]));
 });
 

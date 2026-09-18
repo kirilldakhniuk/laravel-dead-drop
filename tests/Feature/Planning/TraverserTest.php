@@ -175,16 +175,16 @@ it('ascends into a row an exclude fragment kept out of every descending pass', f
     expect(collectedKeys(traverseFixture('dd_test.comments:2', $path), 'orders'))->toBe([99]);
 });
 
-it('names a whole database root as a spec and back', function () {
+it('names a full root as a spec and back', function () {
     expect(Root::full('dd_test')->spec())->toBe('dd_test:*')
-        ->and(Root::full('dd_test')->describe())->toBe('whole database (dd_test)')
+        ->and(Root::full('dd_test')->describe())->toBe('dd_test')
         ->and(Root::full('dd_test')->isFull())->toBeTrue()
         ->and(Root::full('dd_test')->scope())->toBe('dd_test')
         ->and(Root::parse('dd_test:*')->isFull())->toBeTrue()
         ->and(Root::parse('dd_test:*')->connection)->toBe('dd_test')
         // No connection at all means every configured one.
         ->and(Root::full(null)->spec())->toBe('*:*')
-        ->and(Root::full(null)->describe())->toBe('whole database (all connections)')
+        ->and(Root::full(null)->describe())->toBe('all connections')
         ->and(Root::full(null)->scope())->toBeNull()
         ->and(Root::parse('dd_test.companies:1')->isFull())->toBeFalse();
 

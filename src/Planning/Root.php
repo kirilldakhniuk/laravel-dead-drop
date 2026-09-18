@@ -69,14 +69,16 @@ final readonly class Root
     }
 
     /**
-     * The same row set the way an operator would say it: `users #1, #2 (mysql)`.
+     * The same row set the way an operator would say it: `users #1, #2 (mysql)`,
+     * or just the connection name for a dump that takes every table on it —
+     * every dump does today, so saying so would tell a listing nothing.
      * A root of two hundred ids is a listing column, not a recital, so only
      * the first few are named and the rest are counted.
      */
     public function describe(): string
     {
         if ($this->isFull()) {
-            return 'whole database ('.($this->scope() ?? 'all connections').')';
+            return $this->scope() ?? 'all connections';
         }
 
         $shown = array_slice($this->ids, 0, self::DESCRIBED_IDS);

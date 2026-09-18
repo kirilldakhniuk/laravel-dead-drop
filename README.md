@@ -295,7 +295,7 @@ php artisan dead-drop:dumps
 - `--disk=` — defaults to `dead-drop.disk`.
 - `--path=` — defaults to `dead-drop.path`.
 
-It prints id, created, root, status, table count, total rows and total size, newest first, and prints `No artifacts on {disk}:{path}.` when there are none. A manifest it cannot read is listed with a status of `unreadable` rather than stopping the rest.
+It prints id, created, source connection, status, table count, total rows and total size, newest first, and prints `No artifacts on {disk}:{path}.` when there are none. A manifest it cannot read is listed with a status of `unreadable` rather than stopping the rest.
 
 ### Pulling
 
@@ -306,7 +306,7 @@ php artisan dead-drop:pull                              # interactive: pick the 
 php artisan dead-drop:pull [id] --connection=mysql --force
 ```
 
-- `id` (optional argument) — the artifact to load. Run bare in an interactive terminal, it asks which artifact to load, newest first, each one labelled with its root, the time it was taken and how much it holds; an artifact that is not `status: "complete"` is never offered, and the count of those left out is printed above the list. A disk holding exactly one complete artifact is not a question: it is named and used. Run non-interactively, it takes the newest complete artifact as before.
+- `id` (optional argument) — the artifact to load. Run bare in an interactive terminal, it asks which artifact to load, newest first, each one labelled with the connection it was dumped from, the time it was taken and how much it holds; an artifact that is not `status: "complete"` is never offered, and the count of those left out is printed above the list. A disk holding exactly one complete artifact is not a question: it is named and used. Run non-interactively, it takes the newest complete artifact as before.
 - `--connection=` — the target connection. Interactively you are asked which of the configured connections should receive the data, each shown with the driver and database it points at, with the application's default connection preselected; non-interactively it uses `database.default`, and refuses with `Unknown database connection [{connection}].` when that is not one of `database.connections`.
 - `--disk=` / `--path=` — where to read the artifact from. Default to `dead-drop.disk` / `dead-drop.path`.
 - `--force` — skip the confirmation prompt. Required when the command is not interactive, because a scripted run cannot be asked.

@@ -81,7 +81,7 @@ it('runs an artisan command after hook and streams its output', function () {
     // proves the hook ran and wrote through this command's output.
     $this->artisan('dead-drop:pull', ['--connection' => 'dd_target', '--disk' => 'local', '--force' => true])
         ->expectsOutputToContain($id)
-        ->expectsOutputToContain('Root')
+        ->expectsOutputToContain('Source')
         ->assertSuccessful();
 });
 

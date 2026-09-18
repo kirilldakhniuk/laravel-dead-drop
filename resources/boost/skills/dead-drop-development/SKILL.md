@@ -82,7 +82,7 @@ Scoped dumps are not exposed: the planner can traverse from a single root row (d
 php artisan dead-drop:dumps [--disk=<disk>] [--path=<dir>]
 ```
 
-Lists id, created, root, status, table count, rows and size, newest first.
+Lists id, created, source connection, status, table count, rows and size, newest first.
 
 ```bash
 php artisan dead-drop:pull [id] [--connection=<target>] [--disk=<disk>] [--path=<dir>] [--force]

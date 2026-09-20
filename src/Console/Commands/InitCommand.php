@@ -29,16 +29,6 @@ use Throwable;
 
 use function Laravel\Prompts\multiselect;
 
-/**
- * Introspects one or more connections, infers their relationships, classifies
- * and scans their tables, and writes (or updates) a reviewed `<connection>.php`
- * config file per connection.
- *
- * This command only composes the schema, inference and config layers: it
- * decides nothing about redaction, classification or edges itself, and it
- * never overwrites a human's prior decisions — an existing file is merged
- * with the freshly discovered one before being re-rendered.
- */
 final class InitCommand extends Command
 {
     /** @var string */
@@ -48,10 +38,6 @@ final class InitCommand extends Command
     protected $description = "Discover a connection's schema and scaffold or update its DeadDrop config";
 
     /**
-     * Introspection is the expensive part of this command, and the prompts
-     * need it before the work does, so every connection is read at most once
-     * per run.
-     *
      * @var array<string, DatabaseSchema>
      */
     private array $schemas = [];
@@ -68,8 +54,6 @@ final class InitCommand extends Command
         EloquentSource $eloquentSource,
         RedactionRules $rules,
     ): int {
-        // `--connection` and `--skip` are declared `=*`, so Symfony always
-        // hands back an array; only its entries need normalising.
         $connections = array_values(array_map('strval', Arr::wrap($this->option('connection'))));
         $skip = array_values(array_map('strval', Arr::wrap($this->option('skip'))));
 
@@ -101,7 +85,7 @@ final class InitCommand extends Command
             }
         }
 
-        $directory = $this->directory();
+        $directory = $this->configDirectory();
 
         if (! is_dir($directory) && ! @mkdir($directory, 0755, true) && ! is_dir($directory)) {
             $this->error("Could not create directory [{$directory}].");
@@ -110,10 +94,10 @@ final class InitCommand extends Command
         }
 
         foreach ($connections as $connection) {
-            $schema = $this->describe($introspector, $connection);
+            $schema = $this->inspectConnection($introspector, $connection);
             $edges = $edgeInferrer->infer($schema);
 
-            $discovered = $this->discover($schema, $edges, $classifier, $sensitive, $morphs, $rules, $skip);
+            $discovered = $this->discoverConfig($schema, $edges, $classifier, $sensitive, $morphs, $rules, $skip);
 
             $file = "{$directory}/{$connection}.php";
             $existing = $loader->load($connection, $directory);
@@ -132,12 +116,6 @@ final class InitCommand extends Command
     }
 
     /**
-     * A stock Laravel app ships connections nothing has ever been configured
-     * for — an unsupported driver, a host that is not up. Offering them would
-     * mean introspecting them, so each one is tried, and the ones that cannot
-     * answer are named with their reason and left out of the choices instead
-     * of taking the command down with them.
-     *
      * @return list<string>
      */
     private function promptForConnections(Introspector $introspector): array
@@ -150,9 +128,9 @@ final class InitCommand extends Command
             $name = (string) $name;
 
             try {
-                $tableCount = count($this->describe($introspector, $name)->tables);
+                $tableCount = count($this->inspectConnection($introspector, $name)->tables);
             } catch (Throwable $e) {
-                $this->line("<comment>{$name} (unavailable: {$this->reason($e)})</comment>");
+                $this->line("<comment>{$name} (unavailable: {$this->connectionFailureReason($e)})</comment>");
 
                 continue;
             }
@@ -184,7 +162,7 @@ final class InitCommand extends Command
         $candidates = [];
 
         foreach ($connections as $connection) {
-            foreach ($this->describe($introspector, $connection)->tables as $table) {
+            foreach ($this->inspectConnection($introspector, $connection)->tables as $table) {
                 $candidates[] = [$connection, $table->name, $table->estimatedRows];
             }
         }
@@ -209,21 +187,17 @@ final class InitCommand extends Command
     /**
      * @throws Throwable when the connection cannot be introspected
      */
-    private function describe(Introspector $introspector, string $connection): DatabaseSchema
+    private function inspectConnection(Introspector $introspector, string $connection): DatabaseSchema
     {
         return $this->schemas[$connection] ??= $introspector->inspect($connection);
     }
 
-    /**
-     * The first line of why a connection could not be read, short enough to
-     * sit inside a prompt option.
-     */
-    private function reason(Throwable $e): string
+    private function connectionFailureReason(Throwable $e): string
     {
         return Str::limit(trim(explode("\n", $e->getMessage())[0]), 80);
     }
 
-    private function directory(): string
+    private function configDirectory(): string
     {
         $path = $this->option('path');
 
@@ -238,7 +212,7 @@ final class InitCommand extends Command
      * @param  array<string, InferredEdge>  $edges
      * @param  list<string>  $skip
      */
-    private function discover(
+    private function discoverConfig(
         DatabaseSchema $schema,
         array $edges,
         TableClassifier $classifier,
@@ -307,11 +281,7 @@ final class InitCommand extends Command
             }
         }
 
-        // A primary key or a reference column carries the shape of the slice,
-        // not its content, and can never carry a `redact` entry at all — not
-        // even `keep` or `review`. A sensitive-looking name on one (an
-        // `api_key` primary key, a `*_token_id` foreign key) is a suggestion
-        // with nowhere to go, so no entry is written for it.
+        // Primary and reference keys cannot carry redaction entries.
         $redact = array_diff_key($redact, $this->keyColumns($table, $references));
 
         $config = new TableConfig(
@@ -329,9 +299,6 @@ final class InitCommand extends Command
     }
 
     /**
-     * The columns no `redact` entry may name: the single-column primary key
-     * and every reference column.
-     *
      * @param  array<string, Reference>  $references
      * @return array<string, true>
      */
@@ -351,13 +318,6 @@ final class InitCommand extends Command
         return $keys;
     }
 
-    /**
-     * A suggestion is a guess from a column's name, and the gate judges it
-     * against the column's type, nullability and indexes — `null` on a NOT
-     * NULL `*_key`, `hash` on a non-string `ssn`. Rather than write a map
-     * `dead-drop:check` and `dead-drop:dump` will both refuse, every rejected
-     * suggestion is handed back to the human as `review`.
-     */
     private function reviewable(TableConfig $config, Table $table, RedactionRules $rules): TableConfig
     {
         $redact = $config->redact;
@@ -404,8 +364,6 @@ final class InitCommand extends Command
         $skipped = $eloquentSource->skipped();
 
         if ($skipped !== []) {
-            // There is one of these for every accessor and helper on every
-            // model, so the count is the signal and the list is opt-in.
             $this->line(count($skipped).' model methods were skipped because they lack a relation return type (run with -v to list them)');
 
             if ($this->output->isVerbose()) {

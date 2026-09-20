@@ -16,32 +16,11 @@ use Throwable;
 use function Laravel\Prompts\search;
 use function Laravel\Prompts\select;
 
-/**
- * Turns `dead-drop:pull`'s artifact argument and `--connection` option into
- * the two things a load needs — the artifact and the connection to replace —
- * asking for whatever the operator left out.
- *
- * The same two rules as the dump side hold here: anything given on the command
- * line is never asked for, and nothing at all is asked for when the command is
- * not interactive, where a missing piece fails with the argument to pass
- * instead. Any configured connection can be the target, including one the
- * artifact was dumped from: dumping on production over `mysql` and loading
- * into a laptop's `mysql` is the workflow this command exists for, and a
- * connection name says nothing about which database is behind it. What keeps
- * the load off the database it came from is the environment guard and the
- * confirmation, not the name.
- */
 trait ResolvesPullTarget
 {
-    /**
-     * Above this many artifacts a list is worse than a search box.
-     */
     private const int ARTIFACT_CHOICE_LIMIT = 15;
 
     /**
-     * The artifact to load, or `null` once the reason there is none has been
-     * printed.
-     *
      * @throws InvalidArgumentException when a named artifact is not on the disk
      */
     private function resolveManifest(ArtifactReader $reader, string $disk, string $path): ?Manifest
@@ -59,10 +38,6 @@ trait ResolvesPullTarget
         return $this->chooseArtifact($reader, $disk, $path);
     }
 
-    /**
-     * An artifact still marked `writing` is a dump that died halfway, so
-     * loading it would replace whole tables with part of a slice.
-     */
     private function loadable(Manifest $manifest): ?Manifest
     {
         if (! $manifest->isComplete()) {
@@ -81,12 +56,6 @@ trait ResolvesPullTarget
         return null;
     }
 
-    /**
-     * The artifact an operator picks from the disk, newest first. Only
-     * complete ones are offered — an incomplete artifact is not a choice
-     * anyone should be able to make — but they are counted, so a disk whose
-     * newest dump crashed does not look like a disk that lost it.
-     */
     private function chooseArtifact(ArtifactReader $reader, string $disk, string $path): ?Manifest
     {
         $complete = [];
@@ -97,9 +66,6 @@ trait ResolvesPullTarget
             try {
                 $manifest = $reader->manifest($id);
             } catch (Throwable) {
-                // One unreadable manifest is a fact about that artifact, not
-                // a reason to stop offering the rest — and not the same fact
-                // as a dump that died halfway, so it is counted apart.
                 $unreadable++;
 
                 continue;
@@ -126,8 +92,6 @@ trait ResolvesPullTarget
             return $this->noArtifact($disk, $path);
         }
 
-        // One artifact is not a question. It is still named, because a run
-        // that was not asked which artifact it loads should still say.
         if (count($complete) === 1) {
             $only = reset($complete);
             $this->line("Using artifact [{$only->id}].");
@@ -144,9 +108,6 @@ trait ResolvesPullTarget
             : (string) search(label: $label, options: fn (string $value): array => $this->matchingArtifacts($options, $value));
 
         if (! isset($complete[$chosen])) {
-            // Nothing should be able to answer with an id that was not
-            // offered, but a load that cannot say which artifact it would
-            // read must say so rather than fail silently.
             $this->error("Artifact [{$chosen}] is no longer available.");
 
             return null;
@@ -156,15 +117,6 @@ trait ResolvesPullTarget
     }
 
     /**
-     * The offered artifacts matching what has been typed so far. The id is
-     * searched along with the label: the root, the date and the size are what
-     * an operator remembers, and the id is what `dead-drop:dumps` printed for
-     * them to paste.
-     *
-     * A search that matches nothing falls back to the whole list, because the
-     * fallback prompt a non-TTY run gets is a Symfony choice question, and one
-     * with no choices left is an exception rather than an empty list.
-     *
      * @param  array<array-key, string>  $options  label keyed by artifact id
      * @return array<array-key, string>
      */
@@ -183,11 +135,6 @@ trait ResolvesPullTarget
         return $matching === [] ? $options : $matching;
     }
 
-    /**
-     * An artifact the way an operator would recognise it: what was dumped,
-     * when, and how much of it — the id alone is a timestamp and six random
-     * characters.
-     */
     private function describeArtifact(Manifest $manifest): string
     {
         $created = DateTimeImmutable::createFromFormat(DateTimeInterface::ATOM, $manifest->createdAt);
@@ -196,11 +143,6 @@ trait ResolvesPullTarget
         return $this->describeRoot($manifest->root)." · {$when} · {$manifest->totalRows()} rows · ".count($manifest->tables).' tables';
     }
 
-    /**
-     * The manifest stores the root as the spec the planner reads; a listing
-     * shows it the way `dead-drop:dump` is typed. A spec no longer in that
-     * shape is still shown as it stands rather than dropping the artifact.
-     */
     private function describeRoot(string $spec): string
     {
         try {
@@ -210,14 +152,7 @@ trait ResolvesPullTarget
         }
     }
 
-    /**
-     * The connection to load into, or `null` once the reason there is none has
-     * been printed. Every configured connection is a candidate — the artifact
-     * names the connections it came from, but a name is not a database, and
-     * the local copy of a production app is usually configured under the same
-     * one.
-     */
-    private function resolveTarget(Manifest $manifest): ?string
+    private function resolveTarget(): ?string
     {
         $configured = array_map('strval', array_keys((array) config('database.connections')));
 
@@ -258,13 +193,6 @@ trait ResolvesPullTarget
         );
     }
 
-    /**
-     * Says so, once the target is known, when the artifact was dumped from
-     * that same connection. It is not a refusal — it is the normal way to
-     * refresh a laptop — but the rows about to be deleted are the rows the
-     * artifact was taken from, now redacted, and that is worth reading before
-     * the confirmation.
-     */
     private function warnWhenTargetIsSource(Manifest $manifest, string $target): void
     {
         if (array_key_exists($target, $manifest->connections)) {
@@ -272,13 +200,6 @@ trait ResolvesPullTarget
         }
     }
 
-    /**
-     * Whether the target is a source connection of the artifact pointing at a
-     * database of the same name as the dump read from. A name match on both
-     * the connection and the database is as close as an artifact can get to
-     * saying "this may be the very database you dumped", so the confirmation
-     * says it — and still only asks.
-     */
     private function targetSharesSourceDatabaseName(Manifest $manifest, string $target): bool
     {
         $source = $manifest->connections[$target]['database'] ?? null;
@@ -290,19 +211,10 @@ trait ResolvesPullTarget
         $connection = DB::connection($target);
         $database = $connection->getDatabaseName();
 
-        // The manifest records a SQLite database by its file name, because the
-        // directories above it describe the machine the dump ran on, so the
-        // target is reduced the same way before the two are compared.
+        // Match the basename stored for SQLite sources in the manifest.
         return $source === ($connection->getDriverName() === 'sqlite' ? basename($database) : $database);
     }
 
-    /**
-     * What the connection about to be replaced actually points at, read from
-     * the connection itself rather than the raw config: an application that
-     * configures its database with `DB_URL` has no `database` key to print,
-     * and the confirmation has to name the database the load will write to.
-     * Resolving a connection does not open it, so this costs nothing.
-     */
     private function describeTarget(string $name): string
     {
         $connection = DB::connection($name);
@@ -312,12 +224,6 @@ trait ResolvesPullTarget
         return $database === '' ? $driver : "{$driver}: {$database}";
     }
 
-    /**
-     * What a connection points at according to the config, so a name like
-     * `mysql` is not the only thing standing between an operator and the wrong
-     * database. Every candidate in the list is described, so this reads the
-     * config rather than resolving connections the operator will not choose.
-     */
     private function describeConnection(string $name): string
     {
         $driver = $this->connectionValue($name, 'driver');

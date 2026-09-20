@@ -29,21 +29,6 @@ use Illuminate\Support\Facades\Storage;
 use InvalidArgumentException;
 use RuntimeException;
 
-/**
- * Dumps a database whole: every table the reviewed config marks `data` or
- * `lookup`. It plans what the dump contains, puts that plan past the
- * extraction gate, and — unless `--dry-run` — hands it to the executor that
- * writes the redacted artifact.
- *
- * Taking every table whole is referentially complete by construction, so
- * nothing is traversed and there is nothing to narrow: `window`, `exclude`
- * and a root row all scope a traversal, and this command runs none. The
- * planner can still traverse from a single root row; that is not exposed as
- * a command yet.
- *
- * The command composes the config, schema, planning and extraction layers and
- * prints what they answer; it decides nothing about the plan itself.
- */
 final class DumpCommand extends Command
 {
     use FormatsBytes;
@@ -59,7 +44,7 @@ final class DumpCommand extends Command
     public function handle(Planner $planner, ConfigLoader $loader, Introspector $introspector, ExtractionGate $gate, ArtifactBuilder $builder, RedactionContext $context): int
     {
         try {
-            $config = $loader->loadAll($this->directory());
+            $config = $loader->loadAll($this->configDirectory());
         } catch (InvalidArgumentException $e) {
             $this->error($e->getMessage());
 
@@ -85,8 +70,6 @@ final class DumpCommand extends Command
                 return self::FAILURE;
             }
 
-            // The gate runs on a dry run too, as a rehearsal: what a dump
-            // would be refused for is exactly what a plan is read to find out.
             $violations = $gate->check($root, $config, $schemas, $context->salt, $this->configuredSalt())->lines();
             $manifest = null;
 
@@ -100,17 +83,13 @@ final class DumpCommand extends Command
                 }
 
                 $phase = 'Extraction';
-                $manifest = $this->extract($builder, $plan, $root, $config, $schemas, $context);
+                $manifest = $this->writeArtifact($builder, $plan, $root, $config, $schemas, $context);
             }
         } catch (UnsupportedTableException|CircularConnectionException|InvalidArgumentException $e) {
             $this->error($e->getMessage());
 
             return self::FAILURE;
         } catch (QueryException $e) {
-            // A table the engine refuses to read — a permission the run does
-            // not have, a view behind a broken definition — gets the engine's
-            // complaint rather than a stack trace, and the phase that produced
-            // it rather than a guess.
             $this->error("{$phase} failed: {$e->getMessage()}");
 
             return self::FAILURE;
@@ -120,10 +99,9 @@ final class DumpCommand extends Command
             return self::FAILURE;
         }
 
-        $this->report($plan);
+        $this->reportPlan($plan);
 
-        // A refused dry run still prints its plan: the plan is what was asked
-        // for, and the violations are what stands between it and one.
+        // A refused dry run still reports the plan for review.
         if ($violations !== []) {
             $this->error('This dump would be refused:');
 
@@ -137,19 +115,17 @@ final class DumpCommand extends Command
         if ($manifest !== null) {
             $this->info("Artifact: {$this->artifactDisk()}:{$this->artifactPath()}/{$manifest->id}");
         } elseif ($this->plannedByChoice) {
-            // An operator who answered the prompt could have meant to dump.
             $this->line('Planned only; nothing was written.');
         }
 
         return self::SUCCESS;
     }
 
-    private function extract(ArtifactBuilder $builder, ExtractionPlan $plan, Root $root, ConfigSet $config, SchemaSet $schemas, RedactionContext $context): Manifest
+    private function writeArtifact(ArtifactBuilder $builder, ExtractionPlan $plan, Root $root, ConfigSet $config, SchemaSet $schemas, RedactionContext $context): Manifest
     {
         return $builder->build(
             $plan,
             $root,
-            // Every table is taken whole, so there is no date to narrow by.
             null,
             $config,
             $schemas,
@@ -174,7 +150,7 @@ final class DumpCommand extends Command
         return new SchemaSet($schemas);
     }
 
-    private function report(ExtractionPlan $plan): void
+    private function reportPlan(ExtractionPlan $plan): void
     {
         $this->table(
             ['Connection', 'Table', 'Rows', 'Est. size'],
@@ -193,12 +169,6 @@ final class DumpCommand extends Command
         }
     }
 
-    /**
-     * The raw `dead-drop.redaction.salt` value, before APP_KEY derivation —
-     * an empty string counts as unset, same as `SaltResolver`. Only used to
-     * pick the wording of a gate violation; the gate judges the resolved
-     * salt on `$context->salt`, not this one.
-     */
     private function configuredSalt(): ?string
     {
         $salt = config('dead-drop.redaction.salt');
@@ -206,17 +176,12 @@ final class DumpCommand extends Command
         return is_string($salt) && $salt !== '' ? $salt : null;
     }
 
-    /**
-     * `--path` names this command's config directory, not a location on the
-     * artifact disk, so the artifact path is always the configured one and
-     * the shared option-reading version is deliberately overridden.
-     */
     private function artifactPath(): string
     {
         return (string) config('dead-drop.path');
     }
 
-    private function directory(): string
+    private function configDirectory(): string
     {
         $path = $this->option('path');
 

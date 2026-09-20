@@ -129,9 +129,7 @@ it('decodes postgres style boolean strings', function () {
         ->and($false['ok'])->toBeFalse();
 });
 
-it('reads back a row far longer than the read buffer in one piece', function () {
-    // `gzgets()` returns at most its buffer size, so a row wider than that
-    // arrives in fragments; decoding a fragment is a JSON error at pull time.
+it('reads back a large row followed by a short row in one piece', function () {
     $long = str_repeat('x', 1_500_000);
     $disk = Storage::disk('local');
     $writer = new ArtifactWriter($disk, 'dead-drops', '20260912-141500-111111');

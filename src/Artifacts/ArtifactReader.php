@@ -12,10 +12,6 @@ use InvalidArgumentException;
 use JsonException;
 use RuntimeException;
 
-/**
- * Reads dump artifacts back from a disk: listing what is on it, loading a
- * manifest, and streaming a table's rows with their scalar types restored.
- */
 final class ArtifactReader
 {
     public function __construct(
@@ -53,8 +49,6 @@ final class ArtifactReader
         try {
             $decoded = json_decode($contents, associative: true, flags: JSON_THROW_ON_ERROR);
         } catch (JsonException) {
-            // A half-written or hand-edited manifest is a fact about that
-            // artifact, not a reason to hand a parser error to the operator.
             throw new InvalidArgumentException("Artifact [{$id}] has a corrupt manifest.");
         }
 
@@ -121,32 +115,13 @@ final class ArtifactReader
             $types = $this->columnTypes($table);
 
             try {
-                // `gzgets()` stops at its buffer size as well as at a newline,
-                // so a row longer than the buffer arrives in fragments; they
-                // are accumulated until one ends the line (or the file), or a
-                // 2 MiB row would be decoded as two halves of a JSON object.
-                $buffer = '';
-
-                while (($chunk = gzgets($gz, 1048576)) !== false) {
-                    $buffer .= $chunk;
-
-                    if (! str_ends_with($chunk, "\n") && ! gzeof($gz)) {
-                        continue;
-                    }
-
-                    $line = trim($buffer);
-                    $buffer = '';
+                while (($line = gzgets($gz)) !== false) {
+                    $line = trim($line);
 
                     if ($line === '') {
                         continue;
                     }
 
-                    yield $codec->decode($line, $types);
-                }
-
-                $line = trim($buffer);
-
-                if ($line !== '') {
                     yield $codec->decode($line, $types);
                 }
             } finally {

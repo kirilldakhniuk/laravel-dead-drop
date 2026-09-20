@@ -9,11 +9,6 @@ use DeadDrop\DeadDrop\Schema\ColumnType;
 use DeadDrop\DeadDrop\Schema\DatabaseSchema;
 use DeadDrop\DeadDrop\Schema\Table;
 
-/**
- * Compares a freshly introspected schema against a reviewed config and
- * reports where they disagree. Pure comparison: no database access, no
- * filesystem access, nothing but the two objects it is handed.
- */
 final class DriftDetector
 {
     public function __construct(
@@ -22,12 +17,14 @@ final class DriftDetector
 
     public function detect(DatabaseSchema $schema, ConnectionConfig $config): DriftReport
     {
+        $tables = $this->comparableTables($schema, $config);
+
         return new DriftReport(
             newTables: $this->newTables($schema, $config),
             removedTables: $this->removedTables($schema, $config),
-            newColumns: $this->newColumns($schema, $config),
-            removedColumns: $this->removedColumns($schema, $config),
-            undecidedColumns: $this->undecidedColumns($schema, $config),
+            newColumns: $this->newColumns($tables),
+            removedColumns: $this->removedColumns($tables),
+            undecidedColumns: $this->undecidedColumns($tables),
         );
     }
 
@@ -68,17 +65,16 @@ final class DriftDetector
     }
 
     /**
+     * @param  array<string, array{TableConfig, Table}>  $tables
      * @return list<string>
      */
-    private function newColumns(DatabaseSchema $schema, ConnectionConfig $config): array
+    private function newColumns(array $tables): array
     {
         $columns = [];
 
-        foreach ($this->comparableTables($schema, $config) as $tableName => [$tableConfig, $table]) {
-            foreach ($table->columnNames() as $column) {
-                if (! in_array($column, $tableConfig->columns, true)) {
-                    $columns[] = "{$tableName}.{$column}";
-                }
+        foreach ($tables as $tableName => [$tableConfig, $table]) {
+            foreach (array_diff($table->columnNames(), $tableConfig->columns) as $column) {
+                $columns[] = "{$tableName}.{$column}";
             }
         }
 
@@ -88,19 +84,16 @@ final class DriftDetector
     }
 
     /**
+     * @param  array<string, array{TableConfig, Table}>  $tables
      * @return list<string>
      */
-    private function removedColumns(DatabaseSchema $schema, ConnectionConfig $config): array
+    private function removedColumns(array $tables): array
     {
         $columns = [];
 
-        foreach ($this->comparableTables($schema, $config) as $tableName => [$tableConfig, $table]) {
-            $current = $table->columnNames();
-
-            foreach ($tableConfig->columns as $column) {
-                if (! in_array($column, $current, true)) {
-                    $columns[] = "{$tableName}.{$column}";
-                }
+        foreach ($tables as $tableName => [$tableConfig, $table]) {
+            foreach (array_diff($tableConfig->columns, $table->columnNames()) as $column) {
+                $columns[] = "{$tableName}.{$column}";
             }
         }
 
@@ -110,23 +103,21 @@ final class DriftDetector
     }
 
     /**
+     * @param  array<string, array{TableConfig, Table}>  $tables
      * @return list<string>
      */
-    private function undecidedColumns(DatabaseSchema $schema, ConnectionConfig $config): array
+    private function undecidedColumns(array $tables): array
     {
         $columns = [];
 
-        foreach ($this->comparableTables($schema, $config) as $tableName => [$tableConfig, $table]) {
+        foreach ($tables as $tableName => [$tableConfig, $table]) {
             foreach ($tableConfig->redact as $column => $transformer) {
                 if ($transformer === 'review') {
                     $columns[] = "{$tableName}.{$column}";
                 }
             }
 
-            // A primary key or a reference column cannot carry a `redact`
-            // entry at all (`RedactionRules` refuses every spec on one), so
-            // demanding a decision for one would leave it with no legal
-            // state: `check` would fail with the entry and without it.
+            // Keys cannot be redacted, so they need no redaction decision.
             $keys = $this->keyColumns($tableConfig, $table);
 
             foreach ($this->sensitive->detect($table) as $column => $suggestion) {
@@ -135,9 +126,7 @@ final class DriftDetector
                 }
             }
 
-            // A JSON blob of unknown shape is a decision `init` writes as
-            // `review`; deleting that line is not the same as making it, so
-            // the column is undecided again rather than silently allowed.
+            // JSON columns require an explicit decision even if their review entry was deleted.
             foreach ($table->columns as $column) {
                 if ($column->type === ColumnType::Json && ! array_key_exists($column->name, $tableConfig->redact) && ! isset($keys[$column->name])) {
                     $columns[] = "{$tableName}.{$column->name}";
@@ -153,9 +142,6 @@ final class DriftDetector
     }
 
     /**
-     * The columns no `redact` entry may name: the single-column primary key
-     * and every reference column the config records.
-     *
      * @return array<string, true>
      */
     private function keyColumns(TableConfig $config, Table $table): array
@@ -175,9 +161,6 @@ final class DriftDetector
     }
 
     /**
-     * The config tables that are present in the schema and still under
-     * review: not `skip`, not `removed`.
-     *
      * @return array<string, array{TableConfig, Table}>
      */
     private function comparableTables(DatabaseSchema $schema, ConnectionConfig $config): array

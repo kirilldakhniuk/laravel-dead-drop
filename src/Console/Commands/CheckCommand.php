@@ -15,12 +15,6 @@ use DeadDrop\DeadDrop\Schema\Introspector;
 use Illuminate\Console\Command;
 use Illuminate\Support\Arr;
 
-/**
- * Compares each connection's live schema against its reviewed config and
- * fails when they disagree, when a sensitive column has no redaction
- * decision, or when a `redact` entry is one the extraction gate would
- * refuse. Safe to run in CI: fully non-interactive, no writes.
- */
 final class CheckCommand extends Command
 {
     /** @var string */
@@ -31,12 +25,10 @@ final class CheckCommand extends Command
 
     public function handle(Introspector $introspector, SensitiveColumnDetector $sensitive, ConfigLoader $loader, RedactionRules $rules): int
     {
-        $directory = $this->directory();
+        $directory = $this->configDirectory();
         $connections = $this->connections($loader, $directory);
 
         if ($connections === []) {
-            // Nothing to compare is not the same as nothing to report: a CI
-            // job that never ran init would otherwise pass silently.
             $this->error("No DeadDrop config found in [{$directory}] — run dead-drop:init");
 
             return self::FAILURE;
@@ -96,10 +88,6 @@ final class CheckCommand extends Command
     }
 
     /**
-     * The `redact` entries the extraction gate would refuse. `dead-drop:dump`
-     * runs the same rules, so CI has to run them too — a green check and a
-     * dump that will not start is the worst of both.
-     *
      * @return list<string>
      */
     private function invalidRedactions(RedactionRules $rules, ConnectionConfig $config, DatabaseSchema $schema): array
@@ -133,7 +121,7 @@ final class CheckCommand extends Command
         return $connections !== [] ? $connections : $loader->loadAll($directory)->connections();
     }
 
-    private function directory(): string
+    private function configDirectory(): string
     {
         $path = $this->option('path');
 

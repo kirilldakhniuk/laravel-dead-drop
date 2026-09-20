@@ -25,15 +25,6 @@ use Illuminate\Contracts\Filesystem\Filesystem;
 use Illuminate\Support\Facades\DB;
 use RuntimeException;
 
-/**
- * Turns a plan into an artifact on a disk: it resolves the executor, writes
- * the manifest as `writing`, hands every step to the executor in plan order,
- * and flips the manifest to `complete` once the last table is on the disk.
- *
- * It decides nothing about which rows are taken or what a column becomes —
- * the plan and the reviewed config already answered both — so the command
- * above it stays composition and the executor below it stays row movement.
- */
 final class ArtifactBuilder
 {
     public function __construct(
@@ -84,9 +75,7 @@ final class ArtifactBuilder
 
         $writer = new ArtifactWriter($disk, $basePath, $manifest->id);
 
-        // The manifest lands before the first row does, so a dump that dies
-        // half way still leaves something `pull` refuses and `dumps` flags
-        // rather than an unexplained directory of files.
+        // Persist the writing status so interrupted dumps cannot be pulled.
         $writer->writeManifest($manifest);
 
         foreach ($plan->steps as $step) {
@@ -110,9 +99,7 @@ final class ArtifactBuilder
 
             $keys = $step->keyTable === null ? null : $this->keys->get($step->connection, $step->table);
 
-            // A null key set means "the whole table" to an executor, so a step
-            // that planned one and lost it would silently widen the dump past
-            // what the traversal collected.
+            // A missing key set must not turn a scoped step into a full-table export.
             if ($step->keyTable !== null && $keys === null) {
                 throw new RuntimeException("No key set for table [{$step->connection}.{$step->table}].");
             }
@@ -147,14 +134,6 @@ final class ArtifactBuilder
     }
 
     /**
-     * The drivers behind the plan's connections, refusing up front any the
-     * executor cannot read — a native executor that only speaks MySQL should
-     * say so before a single file is written.
-     *
-     * The database each one points at is recorded alongside its driver — the
-     * name only, never a host or a credential — so a pull can say whether the
-     * target it is about to replace is the database the dump came from.
-     *
      * @return array<string, array{driver: string, database: string|null}>
      */
     private function connections(ExtractionPlan $plan, Executor $executor): array
@@ -182,12 +161,6 @@ final class ArtifactBuilder
         return $connections;
     }
 
-    /**
-     * The name of the database a connection read from, and no more of it than
-     * that: a SQLite database is a path, and the directories above the file
-     * describe the machine the dump ran on rather than anything an artifact
-     * should carry off it. `:memory:` is already a name.
-     */
     private function databaseName(string $driver, string $database): ?string
     {
         if ($database === '') {

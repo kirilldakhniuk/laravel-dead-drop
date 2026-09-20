@@ -9,8 +9,7 @@ use DeadDrop\DeadDrop\Schema\ColumnType;
 use Illuminate\Support\Facades\DB;
 
 /**
- * Owns the temporary key tables of one traversal. The caller that started the
- * traversal is responsible for `dropAll()`.
+ * Owns a traversal's temporary tables; the caller must call dropAll() afterwards.
  */
 final class KeySetRepository
 {
@@ -20,16 +19,11 @@ final class KeySetRepository
     private array $keySets = [];
 
     /**
-     * Copies of another connection's key sets, kept apart from the real ones
-     * so a mirror can never become a plan step or an ascend source.
-     *
      * @var array<string, KeySet> keyed "{targetConnection}:{sourceConnection}.{table}"
      */
     private array $mirrors = [];
 
     /**
-     * Connections already pinned to their write PDO.
-     *
      * @var array<string, true>
      */
     private array $pinned = [];
@@ -50,14 +44,7 @@ final class KeySetRepository
     }
 
     /**
-     * A copy of a key set on another connection, so an edge that crosses
-     * connections has something to join against. The source keeps growing
-     * while the traversal runs, so every call refreshes the mirror: the keys
-     * travel in chunks and the ones already there are ignored.
-     *
-     * The table name carries a hash of the source rather than its connection
-     * name: both names can contain underscores, and joining them would let two
-     * different sources claim one table — which `make()` would silently reuse.
+     * Refreshes a source key set's copy on another connection for cross-database joins.
      */
     public function mirror(KeySet $source, string $targetConnection): KeySet
     {
@@ -81,9 +68,6 @@ final class KeySetRepository
     }
 
     /**
-     * The key sets the traversal collected — mirrors are working copies and
-     * are deliberately left out.
-     *
      * @return array<string, KeySet> keyed "{connection}.{table}"
      */
     public function all(): array
@@ -108,9 +92,7 @@ final class KeySetRepository
     {
         $db = DB::connection($connection);
 
-        // A temporary key table lives on the session that created it. On a
-        // read/write-split connection that is the write PDO, so every read of
-        // it — and every join against it — has to go there too.
+        // Temporary key tables and their joins must use the same write PDO session.
         if (! isset($this->pinned[$connection])) {
             $db->useWriteConnectionWhenReading();
 

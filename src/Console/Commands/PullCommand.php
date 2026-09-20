@@ -20,14 +20,6 @@ use Throwable;
 
 use function Laravel\Prompts\confirm;
 
-/**
- * Loads a dump artifact into a target connection, replacing the tables the
- * artifact names and leaving every other table alone.
- *
- * The command guards the environment before it reads anything, picks the
- * artifact, asks once, and then hands the work to `PullRunner`; the loading
- * rules themselves live there.
- */
 final class PullCommand extends Command
 {
     use ResolvesArtifactLocation;
@@ -41,9 +33,6 @@ final class PullCommand extends Command
 
     public function handle(PullRunner $runner): int
     {
-        // The guard comes before the disk is even touched: a pull is a
-        // destructive write, and — now that any connection can be its target —
-        // the environment is what keeps it off a production database.
         $allowed = array_values(array_map('strval', (array) config('dead-drop.pull.allow_environments')));
 
         if (! $this->laravel->environment($allowed)) {
@@ -70,7 +59,7 @@ final class PullCommand extends Command
             return self::FAILURE;
         }
 
-        $target = $this->resolveTarget($manifest);
+        $target = $this->resolveTarget();
 
         if ($target === null) {
             return self::FAILURE;
@@ -79,16 +68,13 @@ final class PullCommand extends Command
         $this->warnWhenTargetIsSource($manifest, $target);
 
         if ($this->option('force') !== true) {
-            // A scripted run cannot be asked, and a pull is a destructive
-            // write, so saying nothing is not the same as saying yes: the
-            // intent has to be on the command line.
             if (! $this->input->isInteractive()) {
                 $this->error('Pass --force to load without confirmation when running non-interactively.');
 
                 return self::FAILURE;
             }
 
-            if (! $this->confirmed($manifest, $target)) {
+            if (! $this->confirmReplacement($manifest, $target)) {
                 $this->info('Aborted.');
 
                 return self::SUCCESS;
@@ -105,12 +91,10 @@ final class PullCommand extends Command
             return self::FAILURE;
         }
 
-        // The target has already been replaced by the time the hooks run, so
-        // the summary is printed first: whatever a hook does next, the
-        // operator can see what is now in their database.
+        // Report the completed load before running hooks that may fail.
         $this->summarise($report, $manifest->id);
 
-        if (! $this->after($report)) {
+        if (! $this->runAfterHooks($report)) {
             $this->error('The artifact was loaded; only the after hook failed.');
 
             return self::FAILURE;
@@ -128,7 +112,7 @@ final class PullCommand extends Command
         }
     }
 
-    private function confirmed(Manifest $manifest, string $target): bool
+    private function confirmReplacement(Manifest $manifest, string $target): bool
     {
         $tables = count($manifest->tables);
         $label = "Replace {$tables} tables on connection [{$target}] ({$this->describeTarget($target)}) with artifact [{$manifest->id}]?";
@@ -140,12 +124,7 @@ final class PullCommand extends Command
         return confirm(label: $label, default: false);
     }
 
-    /**
-     * Runs the configured `pull.after` entries, reporting whether they all
-     * succeeded. A class-string is resolved and invoked with the report; any
-     * other string is an Artisan command.
-     */
-    private function after(PullReport $report): bool
+    private function runAfterHooks(PullReport $report): bool
     {
         foreach ((array) config('dead-drop.pull.after') as $entry) {
             if (! is_string($entry) || $entry === '') {
@@ -155,11 +134,8 @@ final class PullCommand extends Command
             }
 
             try {
-                $exit = $this->invoke($entry, $report);
+                $exit = $this->invokeAfterHook($entry, $report);
             } catch (Throwable $e) {
-                // A misspelled entry reaches Artisan as a command name, a hook
-                // class can fail to resolve, and a hook can throw anything at
-                // all; none of that is worth a stack trace.
                 $this->error("After hook [{$entry}] failed: {$e->getMessage()}");
 
                 return false;
@@ -176,14 +152,9 @@ final class PullCommand extends Command
     }
 
     /**
-     * Runs one hook and reports its exit code: a class-string is resolved from
-     * the container and invoked with the report, anything else is an Artisan
-     * command, which writes to this command's output rather than into a buffer
-     * nobody reads.
-     *
      * @throws Throwable when the hook cannot be resolved, is not invokable, or throws
      */
-    private function invoke(string $entry, PullReport $report): int
+    private function invokeAfterHook(string $entry, PullReport $report): int
     {
         if (! class_exists($entry)) {
             return Artisan::call($entry, [], $this->output);

@@ -35,21 +35,11 @@ final class TransformerFactory
         };
     }
 
-    /**
-     * The length declared in the native type (`varchar(32)` → 32), when the
-     * database states one. `RedactionRules` asks the same question, so this
-     * is the one answer both use.
-     */
     public function declaredLength(Column $column): ?int
     {
         return preg_match('/\((\d+)/', $column->nativeType, $matches) === 1 ? (int) $matches[1] : null;
     }
 
-    /**
-     * Same three patterns as the `email` row in
-     * `Inference\SensitiveColumnDetector::PATTERNS` (that constant is
-     * private, so it is duplicated here rather than shared).
-     */
     public function isEmailColumn(Column $column): bool
     {
         $lower = strtolower($column->name);
@@ -57,11 +47,6 @@ final class TransformerFactory
         return $lower === 'email' || $lower === 'email_address' || str_ends_with($lower, '_email');
     }
 
-    /**
-     * Whether `scramble` can shift this column: a date, datetime or
-     * timestamp. `ColumnType::DateTime` also covers `time` and `year`, which
-     * carry no date to move.
-     */
     public function isDateColumn(Column $column): bool
     {
         if ($column->type !== ColumnType::DateTime) {

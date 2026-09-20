@@ -7,13 +7,14 @@ namespace DeadDrop\DeadDrop\Planning;
 use DeadDrop\DeadDrop\Config\ConfigSet;
 use DeadDrop\DeadDrop\Config\TableClass;
 
-/**
- * The reviewed config read as a directed graph. This is the only place that
- * knows how config structure maps onto edges, so the traverser can ask about
- * relationships without re-reading references itself.
- */
 final readonly class Graph
 {
+    /** @var array<string, list<GraphEdge>> */
+    private array $inbound;
+
+    /** @var array<string, list<GraphEdge>> */
+    private array $outbound;
+
     /**
      * @param  list<GraphEdge>  $edges
      * @param  array<string, TableClass>  $classes  keyed "{connection}.{table}", removed tables omitted
@@ -23,7 +24,18 @@ final readonly class Graph
         private array $edges,
         private array $classes,
         private array $connections,
-    ) {}
+    ) {
+        $inbound = [];
+        $outbound = [];
+
+        foreach ($edges as $edge) {
+            $inbound["{$edge->targetConnection}.{$edge->targetTable}"][] = $edge;
+            $outbound["{$edge->connection}.{$edge->table}"][] = $edge;
+        }
+
+        $this->inbound = $inbound;
+        $this->outbound = $outbound;
+    }
 
     public static function fromConfig(ConfigSet $config): self
     {
@@ -63,12 +75,6 @@ final readonly class Graph
     }
 
     /**
-     * The configured connections, ordered so that a connection comes after
-     * every connection its edges point into: keys are mirrored from the
-     * connection that owns them onto the connection that needs them, so the
-     * owner has to be reachable first. Ties are broken alphabetically to keep
-     * a plan reproducible.
-     *
      * @return list<string>
      *
      * @throws CircularConnectionException when no such order exists
@@ -125,35 +131,21 @@ final readonly class Graph
     }
 
     /**
-     * The edges pointing at this table: the children that can be descended to.
-     *
      * @return list<GraphEdge>
      */
     public function inboundEdges(string $connection, string $table): array
     {
-        return array_values(array_filter(
-            $this->edges,
-            fn (GraphEdge $edge): bool => $edge->targetConnection === $connection && $edge->targetTable === $table,
-        ));
+        return $this->inbound["{$connection}.{$table}"] ?? [];
     }
 
     /**
-     * The edges leaving this table: the parents that must be ascended to.
-     *
      * @return list<GraphEdge>
      */
     public function outboundEdges(string $connection, string $table): array
     {
-        return array_values(array_filter(
-            $this->edges,
-            fn (GraphEdge $edge): bool => $edge->connection === $connection && $edge->table === $table,
-        ));
+        return $this->outbound["{$connection}.{$table}"] ?? [];
     }
 
-    /**
-     * Null when the table is not in the config at all, or was removed from the
-     * schema since the last init.
-     */
     public function tableClass(string $connection, string $table): ?TableClass
     {
         return $this->classes["{$connection}.{$table}"] ?? null;

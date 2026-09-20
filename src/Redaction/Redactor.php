@@ -9,15 +9,6 @@ use DeadDrop\DeadDrop\Redaction\Transformers\KeepTransformer;
 use DeadDrop\DeadDrop\Schema\Table;
 use InvalidArgumentException;
 
-/**
- * Applies a table's `redact` map to a row at extraction time. Built once per
- * table from a reviewed `TableConfig`, and only from one the gate
- * (`RedactionRules`) accepts: the gate runs here too — over the same
- * transformer factory that will build the row transformers — so a caller
- * that skipped it still cannot extract rows through an unreviewed map. Past
- * that point a column whose transformer cannot be built is skipped and left
- * untouched rather than thrown over.
- */
 final class Redactor
 {
     /**
@@ -72,11 +63,6 @@ final class Redactor
     }
 
     /**
-     * The columns whose values this redactor changes. A `keep` entry records
-     * a human decision that a flagged column is fine as it is, so it is
-     * applied as a passthrough but never reported as redacted — the
-     * manifest's `redacted` list would otherwise overstate what moved.
-     *
      * @return list<string>
      */
     public function columns(): array

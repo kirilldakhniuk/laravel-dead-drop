@@ -10,15 +10,8 @@ use Illuminate\Database\Connection;
 use Illuminate\Database\Query\Builder;
 use Illuminate\Support\Collection;
 
-/**
- * The primary keys collected for one table, held in a temporary table on the
- * table's own connection so a traversal never keeps a row set in PHP memory.
- */
 final readonly class KeySet
 {
-    /**
-     * How many keys are read out of a query, or out of this key set, at once.
-     */
     private const int CHUNK = 5000;
 
     public function __construct(
@@ -31,8 +24,7 @@ final readonly class KeySet
     ) {}
 
     /**
-     * Adds keys, ignoring the ones already collected, and reports how many
-     * were new: a zero means this branch of the traversal has settled.
+     * Returns the number of newly inserted keys.
      *
      * @param  list<int|string>  $keys
      */
@@ -46,10 +38,7 @@ final readonly class KeySet
     }
 
     /**
-     * Adds the keys a query selects as `k`, reading them in chunks and adding
-     * each one before the next is fetched, and reports how many were new. The
-     * keys never all exist in PHP at once, which is the whole point of holding
-     * them in a table.
+     * Collects an ordered query's `k` values and returns the number of new keys.
      */
     public function fill(Builder $query): int
     {
@@ -83,7 +72,7 @@ final readonly class KeySet
      */
     public function chunk(int $size, callable $fn): void
     {
-        $this->query()->orderBy('k')->chunk($size, function (Collection $rows) use ($fn): void {
+        $this->query()->chunkById($size, function (Collection $rows) use ($fn): void {
             $keys = [];
 
             foreach ($rows as $row) {
@@ -95,7 +84,7 @@ final readonly class KeySet
             }
 
             $fn($keys);
-        });
+        }, 'k');
     }
 
     public function query(): Builder

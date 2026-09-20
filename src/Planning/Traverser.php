@@ -15,24 +15,11 @@ use Illuminate\Database\Grammar;
 use Illuminate\Database\Query\Builder;
 use Illuminate\Support\Facades\DB;
 use InvalidArgumentException;
+use SplQueue;
 
-/**
- * Expands a root row set into the referential closure the dump needs: down to
- * every child row, up to every row a collected row points at, until nothing
- * grows.
- *
- * Rows never leave the database: every pass joins the temporary key tables and
- * writes the keys it finds straight back into them, so only one chunk of keys
- * is ever in PHP memory. Rows reached by ascending are deliberately not
- * descended into — that is what keeps the closure from swallowing the database.
- */
 final class Traverser
 {
     /**
-     * The descending morph pass's distinct-type scan, which is invariant for
-     * the length of one descend — the source database is only read — while the
-     * frontier table it is asked about changes on every dequeue.
-     *
      * @var array<string, list<array{string, string}>> keyed "{connection}.{table}"
      */
     private array $morphScans = [];
@@ -44,15 +31,11 @@ final class Traverser
 
     public function traverse(Root $root, ConfigSet $config, SchemaSet $schemas, ?DateTimeInterface $since = null): TraversalResult
     {
-        // A traversal owns its key tables: a second run in the same container
-        // scope must not accumulate into the previous run's.
         $this->keys->dropAll();
 
         $graph = Graph::fromConfig($config);
 
-        // One breadth-first pass covers every connection, but an order has to
-        // exist at all: this fails a cycle of connections before the first
-        // key table is created.
+        // Reject connection cycles before creating temporary tables.
         $graph->connectionOrder();
 
         /** @var array<string, UnresolvedReference> $unresolved */
@@ -61,6 +44,8 @@ final class Traverser
         $this->seedRoot($root, $graph, $schemas);
         $this->seedLookups($root, $config, $schemas);
         $this->descend($root, $graph, $config, $schemas, $since, $unresolved);
+
+        // Parents added for referential integrity must not expand the descending scope.
         $this->ascend($graph, $config, $schemas, $unresolved);
 
         return new TraversalResult($this->keys->all(), array_values($unresolved));
@@ -80,12 +65,6 @@ final class Traverser
         $keySet->add($root->ids);
     }
 
-    /**
-     * Lookup tables are copied whole, so their key set is seeded with every
-     * primary key before the traversal starts and is never descended into. The
-     * root is the exception: a lookup root is traversed as if it were data, so
-     * it keeps the ids the caller asked for.
-     */
     private function seedLookups(Root $root, ConfigSet $config, SchemaSet $schemas): void
     {
         foreach ($config->connections as $connection => $connectionConfig) {
@@ -115,23 +94,18 @@ final class Traverser
     }
 
     /**
-     * Breadth-first over the inbound descending edges, one table at a time. A
-     * table is re-queued every time it grows, so rows reached later through a
-     * second inbound edge — or through a self-reference — still have their own
-     * children collected. This terminates because a queue entry costs at least
-     * one new key and keys are finite.
-     *
      * @param  array<string, UnresolvedReference>  $unresolved
      */
     private function descend(Root $root, Graph $graph, ConfigSet $config, SchemaSet $schemas, ?DateTimeInterface $since, array &$unresolved): void
     {
         $this->morphScans = [];
 
-        /** @var list<array{string, string}> $queue */
-        $queue = [[$root->connection, $root->table]];
+        /** @var SplQueue<array{string, string}> $queue */
+        $queue = new SplQueue;
+        $queue->enqueue([$root->connection, $root->table]);
 
-        while ($queue !== []) {
-            [$connection, $table] = array_shift($queue);
+        while (! $queue->isEmpty()) {
+            [$connection, $table] = $queue->dequeue();
             $parent = $this->keys->get($connection, $table);
 
             if ($parent === null) {
@@ -143,13 +117,12 @@ final class Traverser
                     continue;
                 }
 
-                // Lookups are already whole and skipped tables are never dumped.
                 if ($graph->tableClass($edge->connection, $edge->table) !== TableClass::Data) {
                     continue;
                 }
 
-                // An unusable edge is reported once its own rows are collected.
-                if ($this->ineligible($edge, $graph, $schemas) !== null) {
+                // Report unusable edges only when their source rows are collected.
+                if ($this->edgeRejectionReason($edge, $graph, $schemas) !== null) {
                     continue;
                 }
 
@@ -160,12 +133,12 @@ final class Traverser
                 }
 
                 if ($this->descendInto($edge, $parent, $child, $config, $schemas, $since) > 0) {
-                    $queue[] = [$edge->connection, $edge->table];
+                    $queue->enqueue([$edge->connection, $edge->table]);
                 }
             }
 
             foreach ($this->descendMorphs($parent, $config, $schemas, $since, $unresolved) as $grown) {
-                $queue[] = $grown;
+                $queue->enqueue($grown);
             }
         }
     }
@@ -179,8 +152,6 @@ final class Traverser
             return 0;
         }
 
-        // A child on another connection cannot join the parent's key table, so
-        // the parent's keys are mirrored onto the child's connection first.
         $keys = $edge->connection === $parent->connection
             ? $parent->tableName
             : $this->keys->mirror($parent, $edge->connection)->tableName;
@@ -189,7 +160,7 @@ final class Traverser
             ->join($keys, "{$table}.{$edge->column}", '=', "{$keys}.k");
 
         return $child->fill(
-            $this->scope($query, $table, $config->for($edge->connection)->table($table), $since)
+            $this->applyDescendingScope($query, $table, $config->for($edge->connection)->table($table), $since)
                 ->distinct()
                 ->select("{$table}.{$primaryKey} as k")
                 ->orderBy("{$table}.{$primaryKey}"),
@@ -197,10 +168,6 @@ final class Traverser
     }
 
     /**
-     * A polymorphic child has no edge in the graph — the table it belongs to
-     * is a string in its own rows — so every morph table on the frontier
-     * table's connection is asked whether any of its type values names it.
-     *
      * @param  array<string, UnresolvedReference>  $unresolved
      * @return list<array{string, string}> the morph tables that grew, to be re-queued
      */
@@ -231,13 +198,10 @@ final class Traverser
                 continue;
             }
 
-            // Scanned once per descend, then filtered per frontier table: a
-            // morph table only earns a key set once one of its type values
-            // actually names the table on the frontier.
             $scan = $this->morphScans["{$connection}.{$table}"]
                 ??= $this->morphTargets($db->table($table), $connection, $table, $morph['type'], $unresolved);
 
-            $types = $this->frontierTypes($scan, $parent->table);
+            $types = $this->typesTargetingTable($scan, $parent->table);
 
             $child = $types === [] ? null : $this->keySet($connection, $table, $schemas);
 
@@ -253,7 +217,7 @@ final class Traverser
                     ->where("{$table}.{$morph['type']}", $type);
 
                 $added += $child->fill(
-                    $this->scope($query, $table, $tableConfig, $since)
+                    $this->applyDescendingScope($query, $table, $tableConfig, $since)
                         ->distinct()
                         ->select("{$table}.{$primaryKey} as k")
                         ->orderBy("{$table}.{$primaryKey}"),
@@ -269,13 +233,10 @@ final class Traverser
     }
 
     /**
-     * The type values, out of a morph table's resolved targets, that name one
-     * particular table.
-     *
      * @param  list<array{string, string}>  $targets
      * @return list<string>
      */
-    private function frontierTypes(array $targets, string $table): array
+    private function typesTargetingTable(array $targets, string $table): array
     {
         $types = [];
 
@@ -288,11 +249,7 @@ final class Traverser
         return $types;
     }
 
-    /**
-     * Narrows a descending pass to the rows the config lets it take: inside
-     * the incremental window, and not dropped by `exclude`.
-     */
-    private function scope(Builder $query, string $table, ?TableConfig $config, ?DateTimeInterface $since): Builder
+    private function applyDescendingScope(Builder $query, string $table, ?TableConfig $config, ?DateTimeInterface $since): Builder
     {
         $window = $config?->window;
         $exclude = $config?->exclude;
@@ -302,19 +259,14 @@ final class Traverser
         }
 
         if ($exclude !== null) {
-            // `exclude` is a SQL boolean fragment naming the rows to drop:
-            // wrapping it keeps rows whose fragment is NULL and stops a
-            // top-level `or` from escaping the predicate.
-            $query->whereRaw($this->fragment("not coalesce(({$exclude}), false)"));
+            // Keep NULL results and contain any OR clauses inside the exclusion predicate.
+            $query->whereRaw($this->configuredSqlExpression("not coalesce(({$exclude}), false)"));
         }
 
         return $query;
     }
 
     /**
-     * Follows every outbound edge of every key set until no key set grows, so
-     * that each collected row's parents are collected too.
-     *
      * @param  array<string, UnresolvedReference>  $unresolved
      */
     private function ascend(Graph $graph, ConfigSet $config, SchemaSet $schemas, array &$unresolved): void
@@ -326,10 +278,10 @@ final class Traverser
 
             foreach ($this->keys->all() as $source) {
                 foreach ($graph->outboundEdges($source->connection, $source->table) as $edge) {
-                    $reason = $this->ineligible($edge, $graph, $schemas);
+                    $reason = $this->edgeRejectionReason($edge, $graph, $schemas);
 
                     if ($reason !== null) {
-                        $identifier = $this->identifier($edge->connection, $edge->table, $edge->column, $reason);
+                        $identifier = $this->referenceIdentifier($edge->connection, $edge->table, $edge->column, $reason);
 
                         if (! isset($unresolved[$identifier]) && $this->hasReferences($edge, $source, $schemas)) {
                             $unresolved[$identifier] = new UnresolvedReference($edge->connection, $edge->table, $edge->column, $reason);
@@ -368,12 +320,6 @@ final class Traverser
     }
 
     /**
-     * The mirror of the descending morph pass: every collected row of a morph
-     * table points at a row of whatever table its type names, and that row has
-     * to come along. A type nothing answers to, or one naming a table the dump
-     * does not carry, is reported rather than thrown — dead morph types in old
-     * rows are ordinary, and must not fail the dump.
-     *
      * @param  array<string, UnresolvedReference>  $unresolved
      * @return int how many keys this pass added, for the fixpoint
      */
@@ -404,10 +350,10 @@ final class Traverser
         $added = 0;
 
         foreach ($this->morphTargets($collected(), $connection, $table, $morph['type'], $unresolved) as [$type, $targetTable]) {
-            $reason = $this->ineligibleTarget($connection, $targetTable, $graph, $schemas);
+            $reason = $this->targetRejectionReason($connection, $targetTable, $graph, $schemas);
 
             if ($reason !== null) {
-                $this->note($unresolved, $connection, $table, $morph['id'], $reason);
+                $this->recordUnresolvedReference($unresolved, $connection, $table, $morph['id'], $reason);
 
                 continue;
             }
@@ -432,11 +378,6 @@ final class Traverser
     }
 
     /**
-     * The distinct type values in a morph table's rows, each paired with the
-     * table it names. Types nothing answers to are reported once and dropped;
-     * there are only ever a handful of distinct type strings, so this reads
-     * them in one go — the ids they point at are never read into PHP.
-     *
      * @param  array<string, UnresolvedReference>  $unresolved
      * @return list<array{string, string}> pairs of type value and target table
      */
@@ -457,7 +398,7 @@ final class Traverser
             $target = $this->morphs->tableFor($type);
 
             if ($target === null) {
-                $this->note($unresolved, $connection, $table, $column, "unmapped morph type: {$type}");
+                $this->recordUnresolvedReference($unresolved, $connection, $table, $column, "unmapped morph type: {$type}");
 
                 continue;
             }
@@ -469,9 +410,6 @@ final class Traverser
     }
 
     /**
-     * Whether the morph pair is still in the schema. A config written before
-     * the columns were dropped would otherwise fail the whole traversal.
-     *
      * @param  array{type: string, id: string}  $morph
      * @param  array<string, UnresolvedReference>  $unresolved
      */
@@ -485,7 +423,7 @@ final class Traverser
 
         foreach ([$morph['type'], $morph['id']] as $column) {
             if ($meta->column($column) === null) {
-                $this->note($unresolved, $connection, $table, $column, "morph column {$column} does not exist");
+                $this->recordUnresolvedReference($unresolved, $connection, $table, $column, "morph column {$column} does not exist");
 
                 return false;
             }
@@ -494,19 +432,11 @@ final class Traverser
         return true;
     }
 
-    /**
-     * Whether any collected row actually points along this edge: an edge the
-     * traversal cannot follow only matters when it is used.
-     */
     private function hasReferences(GraphEdge $edge, KeySet $source, SchemaSet $schemas): bool
     {
         return $this->referencedRows($edge, $source, $schemas)?->exists() === true;
     }
 
-    /**
-     * The collected rows of the edge's own table that carry a value in the
-     * edge column.
-     */
     private function referencedRows(GraphEdge $edge, KeySet $source, SchemaSet $schemas): ?Builder
     {
         $primaryKey = $this->primaryKey($schemas, $edge->connection, $edge->table);
@@ -520,12 +450,9 @@ final class Traverser
             ->whereNotNull("{$edge->table}.{$edge->column}");
     }
 
-    /**
-     * The reason this edge cannot be followed, or null when it can.
-     */
-    private function ineligible(GraphEdge $edge, Graph $graph, SchemaSet $schemas): ?string
+    private function edgeRejectionReason(GraphEdge $edge, Graph $graph, SchemaSet $schemas): ?string
     {
-        $reason = $this->ineligibleTarget($edge->targetConnection, $edge->targetTable, $graph, $schemas);
+        $reason = $this->targetRejectionReason($edge->targetConnection, $edge->targetTable, $graph, $schemas);
 
         if ($reason !== null) {
             return $reason;
@@ -538,12 +465,7 @@ final class Traverser
         return null;
     }
 
-    /**
-     * The reason rows of this table cannot be pulled in, or null when they
-     * can. A morph target is only ever named by a type string, so this is the
-     * whole check for it; a declared edge has its target column checked too.
-     */
-    private function ineligibleTarget(string $connection, string $table, Graph $graph, SchemaSet $schemas): ?string
+    private function targetRejectionReason(string $connection, string $table, Graph $graph, SchemaSet $schemas): ?string
     {
         $class = $graph->tableClass($connection, $table);
 
@@ -563,27 +485,20 @@ final class Traverser
     }
 
     /**
-     * Records a reference the traversal could not follow, once per distinct
-     * reason: the same dead edge or dead morph type is met again on every
-     * pass.
-     *
      * @param  array<string, UnresolvedReference>  $unresolved
      */
-    private function note(array &$unresolved, string $connection, string $table, string $column, string $reason): void
+    private function recordUnresolvedReference(array &$unresolved, string $connection, string $table, string $column, string $reason): void
     {
-        $unresolved[$this->identifier($connection, $table, $column, $reason)] ??= new UnresolvedReference($connection, $table, $column, $reason);
+        $unresolved[$this->referenceIdentifier($connection, $table, $column, $reason)] ??= new UnresolvedReference($connection, $table, $column, $reason);
     }
 
-    private function identifier(string $connection, string $table, string $column, string $reason): string
+    private function referenceIdentifier(string $connection, string $table, string $column, string $reason): string
     {
         return "{$connection}.{$table}.{$column}: {$reason}";
     }
 
-    /**
-     * A table's `exclude` is a SQL fragment a human wrote into the reviewed
-     * config, so it goes into the query as an expression rather than a value.
-     */
-    private function fragment(string $sql): Expression
+    // Configured SQL is trusted but cannot satisfy Laravel's literal-string expression type.
+    private function configuredSqlExpression(string $sql): Expression
     {
         return new class($sql) implements Expression
         {
@@ -598,10 +513,6 @@ final class Traverser
         };
     }
 
-    /**
-     * Null when the table has no single-column primary key, which is the one
-     * shape a key set cannot represent.
-     */
     private function keySet(string $connection, string $table, SchemaSet $schemas): ?KeySet
     {
         $meta = $schemas->for($connection)->table($table);

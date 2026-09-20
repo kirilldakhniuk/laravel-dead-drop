@@ -13,10 +13,6 @@ use Illuminate\Support\Facades\Storage;
 use InvalidArgumentException;
 use Throwable;
 
-/**
- * Lists the dump artifacts on a disk, newest first, so an operator can see
- * what is there and which of them a crash left half written.
- */
 final class DumpsCommand extends Command
 {
     use FormatsBytes;
@@ -47,8 +43,6 @@ final class DumpsCommand extends Command
             try {
                 $manifest = $reader->manifest($id);
             } catch (Throwable) {
-                // One unreadable manifest is a fact about that artifact, not
-                // a reason to stop listing the rest.
                 $rows[] = [$id, '', '', 'unreadable', '', '', ''];
 
                 continue;
@@ -70,11 +64,6 @@ final class DumpsCommand extends Command
         return self::SUCCESS;
     }
 
-    /**
-     * The manifest stores the root as the spec the planner reads; the listing
-     * shows it the way `dead-drop:dump` is now typed. A spec no longer in that
-     * shape is still shown as it stands rather than dropping the row.
-     */
     private function root(string $spec): string
     {
         try {

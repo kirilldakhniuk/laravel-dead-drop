@@ -4,30 +4,25 @@ declare(strict_types=1);
 
 namespace DeadDrop\DeadDrop\Console\Commands;
 
-use DeadDrop\DeadDrop\Artifacts\Manifest;
 use DeadDrop\DeadDrop\Config\ConfigLoader;
-use DeadDrop\DeadDrop\Config\ConfigSet;
 use DeadDrop\DeadDrop\Console\Commands\Concerns\FormatsBytes;
 use DeadDrop\DeadDrop\Console\Commands\Concerns\ResolvesArtifactLocation;
 use DeadDrop\DeadDrop\Console\Commands\Concerns\ResolvesDumpConnection;
 use DeadDrop\DeadDrop\Extraction\ArtifactBuilder;
-use DeadDrop\DeadDrop\Extraction\ExtractionGate;
+use DeadDrop\DeadDrop\Extraction\DumpRunner;
 use DeadDrop\DeadDrop\Extraction\TableArtifact;
+use DeadDrop\DeadDrop\Jobs\DumpDatabase;
 use DeadDrop\DeadDrop\Planning\CircularConnectionException;
 use DeadDrop\DeadDrop\Planning\ExtractionPlan;
-use DeadDrop\DeadDrop\Planning\Planner;
 use DeadDrop\DeadDrop\Planning\PlanStep;
 use DeadDrop\DeadDrop\Planning\Root;
 use DeadDrop\DeadDrop\Planning\UnsupportedTableException;
-use DeadDrop\DeadDrop\Redaction\RedactionContext;
-use DeadDrop\DeadDrop\Schema\DatabaseSchema;
-use DeadDrop\DeadDrop\Schema\Introspector;
-use DeadDrop\DeadDrop\Schema\SchemaSet;
 use Illuminate\Console\Command;
-use Illuminate\Database\QueryException;
+use Illuminate\Support\Facades\Bus;
 use Illuminate\Support\Facades\Storage;
 use InvalidArgumentException;
 use RuntimeException;
+use Throwable;
 
 final class DumpCommand extends Command
 {
@@ -36,13 +31,19 @@ final class DumpCommand extends Command
     use ResolvesDumpConnection;
 
     /** @var string */
-    protected $signature = 'dead-drop:dump {--connection= : Connection to dump (prompted when several are configured)} {--dry-run : Plan only, extract nothing} {--disk= : Disk to write the artifact to (defaults to dead-drop.disk)} {--path= : Config directory}';
+    protected $signature = 'dead-drop:dump {--connection= : Connection to dump (prompted when several are configured)} {--dry-run : Plan only, extract nothing} {--queue : Dispatch the dump to a queue worker} {--disk= : Disk to write the artifact to (defaults to dead-drop.disk)} {--path= : Config directory}';
 
     /** @var string */
     protected $description = 'Dump every data and lookup table of a connection as a redacted artifact';
 
-    public function handle(Planner $planner, ConfigLoader $loader, Introspector $introspector, ExtractionGate $gate, ArtifactBuilder $builder, RedactionContext $context): int
+    public function handle(ConfigLoader $loader, DumpRunner $runner, ArtifactBuilder $builder): int
     {
+        if ($this->option('queue') && $this->option('dry-run')) {
+            $this->error('--queue cannot be combined with --dry-run.');
+
+            return self::FAILURE;
+        }
+
         try {
             $config = $loader->loadAll($this->configDirectory());
         } catch (InvalidArgumentException $e) {
@@ -57,60 +58,37 @@ final class DumpCommand extends Command
             return self::FAILURE;
         }
 
+        if ($this->option('queue')) {
+            return $this->enqueue($root, $builder);
+        }
+
         $dryRun = $this->planOnly($this->artifactDisk(), $this->artifactPath());
-        $phase = 'Planning';
 
         try {
-            $schemas = $this->schemas($config, $introspector);
-            $plan = $planner->planFull($config, $schemas, $root->scope());
-
-            if ($plan->steps === []) {
-                $this->error('Nothing to dump: every table in scope is skipped or missing.');
-
-                return self::FAILURE;
-            }
-
-            $violations = $gate->check($root, $config, $schemas, $context->salt, $this->configuredSalt())->lines();
-            $manifest = null;
-
-            if (! $dryRun) {
-                if ($violations !== []) {
-                    foreach ($violations as $violation) {
-                        $this->error($violation);
-                    }
-
-                    return self::FAILURE;
-                }
-
-                $phase = 'Extraction';
-                $manifest = $this->writeArtifact($builder, $plan, $root, $config, $schemas, $context);
-            }
-        } catch (UnsupportedTableException|CircularConnectionException|InvalidArgumentException $e) {
-            $this->error($e->getMessage());
-
-            return self::FAILURE;
-        } catch (QueryException $e) {
-            $this->error("{$phase} failed: {$e->getMessage()}");
-
-            return self::FAILURE;
-        } catch (RuntimeException $e) {
+            $result = $runner->run($root, $config, $this->artifactDisk(), $this->artifactPath(), $dryRun, progress: function (TableArtifact $artifact): void {
+                $this->line("  {$artifact->connection}.{$artifact->table} … {$artifact->rows} rows");
+            });
+        } catch (UnsupportedTableException|CircularConnectionException|InvalidArgumentException|RuntimeException $e) {
             $this->error($e->getMessage());
 
             return self::FAILURE;
         }
 
-        $this->reportPlan($plan);
+        if ($dryRun || $result->violations === []) {
+            $this->reportPlan($result->plan);
+        }
 
-        // A refused dry run still reports the plan for review.
-        if ($violations !== []) {
+        if ($result->violations !== []) {
             $this->error('This dump would be refused:');
 
-            foreach ($violations as $violation) {
+            foreach ($result->violations as $violation) {
                 $this->error($violation);
             }
 
             return self::FAILURE;
         }
+
+        $manifest = $result->manifest;
 
         if ($manifest !== null) {
             $this->info("Artifact: {$this->artifactDisk()}:{$this->artifactPath()}/{$manifest->id}");
@@ -121,33 +99,45 @@ final class DumpCommand extends Command
         return self::SUCCESS;
     }
 
-    private function writeArtifact(ArtifactBuilder $builder, ExtractionPlan $plan, Root $root, ConfigSet $config, SchemaSet $schemas, RedactionContext $context): Manifest
+    private function enqueue(Root $root, ArtifactBuilder $builder): int
     {
-        return $builder->build(
-            $plan,
-            $root,
-            null,
-            $config,
-            $schemas,
-            $context,
-            Storage::disk($this->artifactDisk()),
-            $this->artifactPath(),
-            function (TableArtifact $artifact): void {
-                $this->line("  {$artifact->connection}.{$artifact->table} … {$artifact->rows} rows");
-            },
-        );
-    }
+        $connection = (string) (config('dead-drop.queue.connection') ?? config('queue.default'));
+        $driver = config("queue.connections.{$connection}.driver");
+        $timeout = (int) config('dead-drop.queue.timeout', 3600);
+        $retryAfter = config("queue.connections.{$connection}.retry_after");
 
-    private function schemas(ConfigSet $config, Introspector $introspector): SchemaSet
-    {
-        $schemas = [];
-
-        foreach ($config->connections() as $connection) {
-            $schemas[$connection] = $introspector->inspect($connection);
+        if (in_array($driver, ['database', 'redis', 'beanstalkd'], true)) {
+            $retryAfter ??= 90;
         }
 
-        /** @var array<string, DatabaseSchema> $schemas */
-        return new SchemaSet($schemas);
+        if (! is_string($driver) || in_array($driver, ['sync', 'null', 'deferred', 'background', 'failover'], true)) {
+            $this->error('Choose a durable asynchronous queue connection using dead-drop.queue.connection.');
+
+            return self::FAILURE;
+        }
+
+        if ($timeout < 1 || (is_numeric($retryAfter) && (int) $retryAfter <= $timeout)) {
+            $this->error('dead-drop.queue.timeout must be positive and shorter than the queue connection retry_after.');
+
+            return self::FAILURE;
+        }
+
+        $job = null;
+
+        try {
+            $manifest = $builder->reserve($root, Storage::disk($this->artifactDisk()), $this->artifactPath());
+            $job = new DumpDatabase($manifest->id, $this->configDirectory(), $this->artifactDisk(), $this->artifactPath(), $timeout);
+            Bus::dispatch($job->onConnection($connection)->onQueue((string) config('dead-drop.queue.name', 'dead-drop')));
+        } catch (Throwable $e) {
+            $job?->failed($e);
+            $this->error($e->getMessage());
+
+            return self::FAILURE;
+        }
+
+        $this->info("Queued artifact: {$this->artifactDisk()}:{$this->artifactPath()}/{$manifest->id}");
+
+        return self::SUCCESS;
     }
 
     private function reportPlan(ExtractionPlan $plan): void
@@ -167,13 +157,6 @@ final class DumpCommand extends Command
         foreach ($plan->unresolved as $reference) {
             $this->line("  - {$reference->connection}.{$reference->table}.{$reference->column} — {$reference->reason}");
         }
-    }
-
-    private function configuredSalt(): ?string
-    {
-        $salt = config('dead-drop.redaction.salt');
-
-        return is_string($salt) && $salt !== '' ? $salt : null;
     }
 
     private function artifactPath(): string

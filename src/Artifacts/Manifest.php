@@ -15,6 +15,10 @@ use InvalidArgumentException;
  */
 final readonly class Manifest
 {
+    public const string STATUS_QUEUED = 'queued';
+
+    public const string STATUS_FAILED = 'failed';
+
     public const string STATUS_WRITING = 'writing';
 
     public const string STATUS_COMPLETE = 'complete';

@@ -33,6 +33,7 @@ This publishes `config/dead-drop.php`:
 - `model_paths` (default `['app/Models']`) — directories under `base_path()` scanned for Eloquent models when inferring relationships.
 - `disk` (`DEAD_DROP_DISK`, default `local`) / `path` (`DEAD_DROP_PATH`, default `dead-drops`) — where `dead-drop:dump`, `dead-drop:dumps` and `dead-drop:pull` read and write artifacts by default; set `DEAD_DROP_DISK=s3` for a shared handoff.
 - `executor` (`DEAD_DROP_EXECUTOR`, default `php`) — which registered executor moves rows during `dead-drop:dump`.
+- `queue.connection` (`DEAD_DROP_QUEUE_CONNECTION`, default app queue), `queue.name` (`DEAD_DROP_QUEUE`, default `dead-drop`), and `queue.timeout` (`DEAD_DROP_QUEUE_TIMEOUT`, default 3600 seconds) configure `--queue`.
 - `redaction.salt` (`DEAD_DROP_REDACTION_SALT`) — defaults to a value derived from `APP_KEY` (`SaltResolver`, `hash('sha256', 'dead-drop|'.$appKey)`, raw string including any `base64:` prefix), so a dump works with no redaction configuration at all; the resolved salt must be at least 16 characters. Set it explicitly when several apps must produce identical hashes, or to keep hashes stable across an `APP_KEY` rotation. `redaction.email_domain` (`DEAD_DROP_EMAIL_DOMAIN`, default `example.test`).
 - `pull.allow_environments` (default `['local', 'staging']`) and `pull.after` (default `[]`, class-strings or Artisan command names run after a successful pull).
 - `binaries.psql` / `binaries.mysql` / `binaries.mysqlsh` — reserved for native executors, which do not ship yet; they do nothing today.
@@ -65,7 +66,7 @@ Non-interactive, makes no writes, and exits non-zero when the schema and config 
 ### 5. Dump the database, redacted
 
 ```bash
-php artisan dead-drop:dump [--connection=<name>] [--dry-run] [--disk=<disk>] [--path=<dir>]
+php artisan dead-drop:dump [--connection=<name>] [--dry-run | --queue] [--disk=<disk>] [--path=<dir>]
 ```
 
 `dead-drop:dump` takes the whole database: every `data` and `lookup` table with rows that is not marked `removed` and the live schema still has, whole. `skip` tables are left out. `window` and `exclude` scope a traversal and this command runs none, so they are not applied — which is exactly what makes the result referentially complete by construction (nothing is traversed, so there are never unresolved references).
@@ -73,6 +74,14 @@ php artisan dead-drop:dump [--connection=<name>] [--dry-run] [--disk=<disk>] [--
 `--connection=` names the connection to dump — every configured connection is still loaded, because cross-connection references need them — and is inferred when only one connection is configured or the default connection has a config (`Using connection [mysql].`). Where neither applies, an interactive run asks (`Which connection should be dumped?`) and a non-interactive one dumps every configured connection. A connection whose every table is `skip` is named (`No dumpable tables on connection [x]; skipped.`) and left out rather than failing the run. In an interactive terminal the only other question is `What now?` — plan only, or dump; non-interactively nothing is prompted and the run extracts unless `--dry-run` says otherwise.
 
 `--dry-run` plans without extracting: it prints the row count and estimated size per table, and rehearses the gate — a plan that would be refused prints `This dump would be refused:` with the violations and exits non-zero. A plan with nothing in it is refused outright (`Nothing to dump: every table in scope is skipped or missing.`), dry run or not. Without `--dry-run`, the plan is put through a fail-closed gate (schema drift, a redaction salt shorter than 16 characters after resolving `APP_KEY`, invalid `redact` placements) before a single row moves; on success it writes a `manifest.json` (`status: "writing"`), exports every table through the configured `Executor` with each row redacted, flips the manifest to `status: "complete"`, and prints `Artifact: {disk}:{path}/{id}`. A composite primary key — or no primary key at all — fails the plan before anything is read.
+
+Use `--queue` to dispatch one complete dump and print its artifact ID immediately. It cannot be combined with `--dry-run`, and skips the plan/extract prompt. The worker loads current config and rechecks the gate. Configure a durable queue connection (database/Redis/SQS/Beanstalkd), run `php artisan queue:work <queue-connection> --queue=dead-drop`, and set its `retry_after` (or SQS visibility timeout) longer than `dead-drop.queue.timeout`. For a 3600-second dump timeout, use `retry_after=3700`. Database queues need Laravel's jobs table; timeouts need `pcntl`. Worker process-manager shutdown settings must allow the dump to finish. Direct `sync`, `null`, `deferred`, `background`, and `failover` drivers are refused.
+
+Artifacts progress through `queued`, `writing`, `complete`, or `failed`; only `complete` can be pulled. Jobs make one automatic attempt; `queue:retry` restarts the whole dump with a fresh snapshot. Duplicate attempts for one artifact use an atomic cache lock. Workers must share the cache, artifact storage, config directory, and compatible app configuration. A hard kill or storage failure may leave a `writing` artifact behind.
+
+The built-in PHP executor takes a private read-only `REPEATABLE READ` snapshot per selected MySQL/MariaDB connection, covering planning and all table reads. Included tables must be InnoDB; included views and MyISAM tables are refused. Avoid concurrent DDL. Snapshots are independent across connections; PostgreSQL, SQLite, and custom executors do not gain this guarantee. Configure a replica as its own source connection: snapshots use the source's writer settings, not its read-replica settings.
+
+Keep separate table files and one sequential worker per dump. Large dumps hold up to 1,000 rows in memory and stage one compressed table in local temporary storage before upload. Budget disk space and runtime, and monitor old row versions retained by long MySQL snapshots; do not promise 50 GB performance without a benchmark.
 
 Scoped dumps are not exposed: the planner can traverse from a single root row (descending to children, ascending to referenced parents), and that engine is implemented and tested, but no command starts one. Do not tell a consumer they can dump a slice today.
 
@@ -105,6 +114,7 @@ Read before executing:
 
 - A team enabling Dead Drop on a fresh app: publish the config (the redaction salt derives from `APP_KEY` and the disk defaults to `local`, so no configuration is required to get started), run `dead-drop:init --connection=mysql`, review the generated `config/dead-drop/mysql.php` (confirm `redact` entries, fix any `review` placeholders), then add `php artisan dead-drop:check` as a CI step after migrations.
 - Refreshing a staging database: `php artisan dead-drop:dump --connection=mysql --disk=local` to write a redacted artifact, then `php artisan dead-drop:pull --connection=staging` to load it into a staging database.
+- Queuing a production export: configure `dead-drop.queue` and a worker, then `php artisan dead-drop:dump --connection=mysql --queue --disk=s3`; inspect status with `php artisan dead-drop:dumps --disk=s3`.
 - Checking what a dump would contain before writing one: `php artisan dead-drop:dump --connection=mysql --dry-run`.
 - Registering a custom executor from a service provider: inject `DeadDrop\DeadDrop\Extraction\ExecutorManager` and call `$executors->extend('mysqlsh', fn () => new MySqlShellExecutor)`, then select it with `DEAD_DROP_EXECUTOR=mysqlsh`.
 

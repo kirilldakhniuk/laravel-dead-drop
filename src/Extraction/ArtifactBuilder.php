@@ -24,6 +24,7 @@ use DeadDrop\DeadDrop\Schema\SchemaSet;
 use Illuminate\Contracts\Filesystem\Filesystem;
 use Illuminate\Support\Facades\DB;
 use RuntimeException;
+use Throwable;
 
 final class ArtifactBuilder
 {
@@ -47,15 +48,16 @@ final class ArtifactBuilder
         Filesystem $disk,
         string $basePath,
         ?Closure $progress = null,
+        ?Manifest $pending = null,
     ): Manifest {
-        $executor = $this->executors->driver();
+        $executor = $this->executors->driver($pending?->executor);
         $connections = $this->connections($plan, $executor);
         $now = new DateTimeImmutable('now', new DateTimeZone('UTC'));
 
         $manifest = new Manifest(
-            id: Manifest::newId($now),
+            id: $pending->id ?? Manifest::newId($now),
             status: Manifest::STATUS_WRITING,
-            createdAt: $now->format(DateTimeInterface::ATOM),
+            createdAt: $pending->createdAt ?? $now->format(DateTimeInterface::ATOM),
             packageVersion: $this->packageVersion(),
             root: $root->spec(),
             since: $since?->format(DateTimeInterface::ATOM),
@@ -78,52 +80,60 @@ final class ArtifactBuilder
         // Persist the writing status so interrupted dumps cannot be pulled.
         $writer->writeManifest($manifest);
 
-        foreach ($plan->steps as $step) {
-            $table = $schemas->for($step->connection)->table($step->table);
+        try {
+            foreach ($plan->steps as $step) {
+                $table = $schemas->for($step->connection)->table($step->table);
 
-            if ($table === null) {
-                throw new RuntimeException("No schema for table [{$step->connection}.{$step->table}].");
+                if ($table === null) {
+                    throw new RuntimeException("No schema for table [{$step->connection}.{$step->table}].");
+                }
+
+                $tableConfig = $config->for($step->connection)->table($step->table);
+
+                if ($tableConfig === null) {
+                    throw new RuntimeException("No config for table [{$step->connection}.{$step->table}].");
+                }
+
+                $primaryKey = $table->primaryKey();
+
+                if ($primaryKey === null) {
+                    throw new RuntimeException("Table [{$step->connection}.{$step->table}] has no single-column primary key to export by.");
+                }
+
+                $keys = $step->keyTable === null ? null : $this->keys->get($step->connection, $step->table);
+
+                // A missing key set must not turn a scoped step into a full-table export.
+                if ($step->keyTable !== null && $keys === null) {
+                    throw new RuntimeException("No key set for table [{$step->connection}.{$step->table}].");
+                }
+                $redactor = Redactor::forTable($tableConfig, $table, $context);
+                $artifact = $executor->export($step, $table, $tableConfig, $keys, $redactor, $writer);
+
+                $manifest = $manifest->withTable(new TableManifest(
+                    connection: $artifact->connection,
+                    table: $artifact->table,
+                    file: $artifact->file,
+                    format: $artifact->format,
+                    rows: $artifact->rows,
+                    bytes: $artifact->bytes,
+                    primaryKey: $primaryKey,
+                    columns: array_map(
+                        fn (Column $column): array => ['name' => $column->name, 'type' => $column->type->value],
+                        array_values($table->columns),
+                    ),
+                    redacted: $redactor->columns(),
+                ));
+
+                $writer->writeManifest($manifest);
+
+                if ($progress !== null) {
+                    $progress($artifact);
+                }
             }
+        } catch (Throwable $e) {
+            $writer->writeManifest($manifest->withStatus(Manifest::STATUS_FAILED));
 
-            $tableConfig = $config->for($step->connection)->table($step->table);
-
-            if ($tableConfig === null) {
-                throw new RuntimeException("No config for table [{$step->connection}.{$step->table}].");
-            }
-
-            $primaryKey = $table->primaryKey();
-
-            if ($primaryKey === null) {
-                throw new RuntimeException("Table [{$step->connection}.{$step->table}] has no single-column primary key to export by.");
-            }
-
-            $keys = $step->keyTable === null ? null : $this->keys->get($step->connection, $step->table);
-
-            // A missing key set must not turn a scoped step into a full-table export.
-            if ($step->keyTable !== null && $keys === null) {
-                throw new RuntimeException("No key set for table [{$step->connection}.{$step->table}].");
-            }
-            $redactor = Redactor::forTable($tableConfig, $table, $context);
-            $artifact = $executor->export($step, $table, $tableConfig, $keys, $redactor, $writer);
-
-            $manifest = $manifest->withTable(new TableManifest(
-                connection: $artifact->connection,
-                table: $artifact->table,
-                file: $artifact->file,
-                format: $artifact->format,
-                rows: $artifact->rows,
-                bytes: $artifact->bytes,
-                primaryKey: $primaryKey,
-                columns: array_map(
-                    fn (Column $column): array => ['name' => $column->name, 'type' => $column->type->value],
-                    array_values($table->columns),
-                ),
-                redacted: $redactor->columns(),
-            ));
-
-            if ($progress !== null) {
-                $progress($artifact);
-            }
+            throw $e;
         }
 
         $manifest = $manifest->withStatus(Manifest::STATUS_COMPLETE);
@@ -168,6 +178,26 @@ final class ArtifactBuilder
         }
 
         return $driver === 'sqlite' ? basename($database) : $database;
+    }
+
+    public function reserve(Root $root, Filesystem $disk, string $basePath): Manifest
+    {
+        $now = new DateTimeImmutable('now', new DateTimeZone('UTC'));
+        $manifest = new Manifest(
+            id: Manifest::newId($now),
+            status: Manifest::STATUS_QUEUED,
+            createdAt: $now->format(DateTimeInterface::ATOM),
+            packageVersion: $this->packageVersion(),
+            root: $root->spec(),
+            since: null,
+            executor: $this->executors->driver()->name(),
+            connections: [],
+            tables: [],
+            unresolved: [],
+        );
+        (new ArtifactWriter($disk, $basePath, $manifest->id))->writeManifest($manifest);
+
+        return $manifest;
     }
 
     private function packageVersion(): string

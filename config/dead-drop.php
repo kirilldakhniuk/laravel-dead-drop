@@ -17,6 +17,12 @@ return [
     // Which executor moves rows during dead-drop:dump ('php' ships with the package; register others with ExecutorManager::extend()).
     'executor' => env('DEAD_DROP_EXECUTOR', 'php'),
 
+    'queue' => [
+        'connection' => env('DEAD_DROP_QUEUE_CONNECTION'),
+        'name' => env('DEAD_DROP_QUEUE', 'dead-drop'),
+        'timeout' => (int) env('DEAD_DROP_QUEUE_TIMEOUT', 3600),
+    ],
+
     'redaction' => [
         // When unset, derived from APP_KEY (DeadDrop\DeadDrop\Redaction\SaltResolver) so a dump works with no
         // redaction configuration at all. Set DEAD_DROP_REDACTION_SALT to pin the salt across apps or key rotations.

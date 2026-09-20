@@ -11,7 +11,6 @@ use DeadDrop\DeadDrop\Planning\PlanStep;
 use DeadDrop\DeadDrop\Redaction\Redactor;
 use DeadDrop\DeadDrop\Schema\Table;
 use Illuminate\Support\Collection;
-use Illuminate\Support\Facades\DB;
 use InvalidArgumentException;
 use Throwable;
 
@@ -20,6 +19,10 @@ final class PhpExecutor implements Executor
     private const int CHUNK = 1000;
 
     private const array SUPPORTED = ['mysql', 'mariadb', 'pgsql', 'sqlite'];
+
+    public function __construct(
+        private readonly SourceConnections $connections = new SourceConnections,
+    ) {}
 
     public function name(): string
     {
@@ -39,10 +42,7 @@ final class PhpExecutor implements Executor
             throw new InvalidArgumentException("Table [{$step->connection}.{$step->table}] has no single-column primary key to export by.");
         }
 
-        $db = DB::connection($step->connection);
-
-        // Temporary key tables belong to the write PDO session.
-        $db->useWriteConnectionWhenReading();
+        $db = $this->connections->get($step->connection);
 
         $types = [];
 
@@ -53,7 +53,7 @@ final class PhpExecutor implements Executor
         $fileName = "{$step->connection}.{$step->table}.ndjson.gz";
         $file = $writer->table($fileName, $types);
 
-        $query = $db->table($table->name)->select("{$table->name}.*");
+        $query = $db->table($table->name)->useWritePdo()->select("{$table->name}.*");
 
         if ($keys !== null) {
             $query->join($keys->tableName, "{$table->name}.{$primaryKey}", '=', "{$keys->tableName}.k");

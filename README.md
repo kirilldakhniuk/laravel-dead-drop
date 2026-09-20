@@ -41,6 +41,7 @@ This publishes `config/dead-drop.php`:
 - `disk` (`DEAD_DROP_DISK`, default `local`) — the disk `dead-drop:dump`, `dead-drop:dumps` and `dead-drop:pull` read and write artifacts on unless overridden with `--disk=`.
 - `path` (`DEAD_DROP_PATH`, default `dead-drops`) — the base path on that disk under which each dump gets its own `<id>/` directory, unless overridden with `--path=`.
 - `executor` (`DEAD_DROP_EXECUTOR`, default `php`) — which registered `Executor` moves rows during `dead-drop:dump`. See Executors below.
+- `queue.connection` (`DEAD_DROP_QUEUE_CONNECTION`, default: the app’s default queue connection), `queue.name` (`DEAD_DROP_QUEUE`, default `dead-drop`), and `queue.timeout` (`DEAD_DROP_QUEUE_TIMEOUT`, default `3600` seconds) — used only with `dead-drop:dump --queue`.
 - `redaction.salt` (`DEAD_DROP_REDACTION_SALT`) — defaults to a value derived from `APP_KEY` when unset; the resolved salt must be at least 16 characters or `dead-drop:dump` refuses to run. See Redaction below for how the default is derived.
 - `redaction.email_domain` (`DEAD_DROP_EMAIL_DOMAIN`, default `example.test`) — the domain used when `hash` redacts an email-shaped column.
 - `binaries.psql` / `binaries.mysql` / `binaries.mysqlsh` (`DEAD_DROP_PSQL` / `DEAD_DROP_MYSQL` / `DEAD_DROP_MYSQLSH`) — reserved for native executors, which do not ship in this phase; they have no effect yet.
@@ -205,6 +206,7 @@ php artisan dead-drop:dump --connection=mysql --dry-run
 - `--path=` — config directory. Defaults to `config_path(config('dead-drop.config_path'))`.
 - `--disk=` — disk to write the artifact to. Defaults to `dead-drop.disk` (`DEAD_DROP_DISK`, default `local`).
 - `--dry-run` — plan only; extract nothing.
+- `--queue` — dispatch one complete dump to a queue worker and print its artifact ID immediately. Cannot be combined with `--dry-run`; skips the plan/extract prompt. The worker loads the current reviewed config, plans, and runs the extraction gate before exporting.
 
 What the dump contains:
 
@@ -217,6 +219,40 @@ What the dump contains:
 Run in a real terminal, two things are asked: which connection to dump (only when several are configured and the default connection has no config), and then whether to plan or extract — answering `plan` prints the plan and `Planned only; nothing was written.` Prompts only ever appear in a terminal: with `--no-interaction`, and anywhere stdin is not a TTY (cron, a container entrypoint, a CI step), the run behaves exactly as `--no-interaction` does — nothing is prompted for and it extracts unless `--dry-run` says otherwise.
 
 A plan with nothing in it — every table in scope `skip`ped, `removed` or gone from the schema — is refused with `Nothing to dump: every table in scope is skipped or missing.` rather than written out as an empty artifact.
+
+#### Queued dumps
+
+The foreground command remains the default. To move a dump into the background, configure a durable Laravel queue connection (`database`, `redis`, `sqs`, `beanstalkd`, or a compatible custom driver) and run a worker:
+
+```dotenv
+DEAD_DROP_QUEUE_CONNECTION=database
+DEAD_DROP_QUEUE=dead-drop
+DEAD_DROP_QUEUE_TIMEOUT=3600
+```
+
+For a database queue, install Laravel's jobs-table migration if your app does not already have it. In `config/queue.php`, set that queue connection's `retry_after` to **3700** seconds for the one-hour timeout above. The command refuses a nonpositive timeout or a configured `retry_after` that is no longer than the dump timeout. For SQS, configure the queue's visibility timeout instead. Use a dedicated queue connection when other jobs need a shorter reservation time.
+
+```bash
+php artisan queue:work database --queue=dead-drop --timeout=3600 --tries=1
+php artisan dead-drop:dump --connection=mysql --queue
+php artisan dead-drop:dumps
+```
+
+Use a process manager to keep the worker running. Job timeouts require PHP's `pcntl` extension. Set its shutdown grace period longer than the dump timeout, including Horizon or Supervisor settings when applicable. `sync`, `null`, `deferred`, `background`, and `failover` queue drivers are refused for `--queue`; select the durable backend directly.
+
+The command prints `Queued artifact: {disk}:{path}/{id}`. That manifest progresses through `queued`, `writing`, and `complete`; caught failures and worker timeouts mark it `failed`. Progress is saved after each table. A hard process kill or unavailable artifact disk can leave `writing` behind. Only `complete` artifacts can be pulled.
+
+Each job gets one automatic attempt. Use Laravel's `queue:retry` after resolving a failure, or dispatch a new dump. A retry starts the whole dump with a new snapshot; it does not resume a partial snapshot. Duplicate deliveries for one artifact are protected by a cache lock, and deliveries after completion do nothing. All workers must share a cache store with atomic locks, the artifact disk, the reviewed config directory, and compatible application configuration. Use S3 or shared storage when dispatching and processing on different machines. Queue payloads carry artifact locations and config paths, not database credentials or source rows.
+
+#### MySQL snapshots and large databases
+
+The built-in PHP executor uses a private connection and a read-only `REPEATABLE READ` transaction for each selected MySQL/MariaDB database. Planning and extraction use the same connection, so all table counts and exported rows see the snapshot established by its first table read. The private connection uses the writer configuration even when the application has a read replica; the application's and queue's existing connections are not changed. The snapshot connections close after success or failure.
+
+Every included MySQL table must use InnoDB. Included MyISAM tables and views are refused; skip them or convert the tables before dumping. Avoid schema migrations during a dump: the transaction protects row consistency, not concurrent DDL. Snapshots are per database connection, with no coordinated snapshot across different connections. PostgreSQL and SQLite retain their existing extraction behavior; custom executors are responsible for their own consistency guarantees.
+
+Keep one gzipped NDJSON file per table plus the manifest. Each dump processes tables sequentially in one worker. Separate files make table loading and inspection straightforward; multiple export processes would need coordinated snapshots before they could safely accelerate one dump. A single combined file would not by itself speed extraction. Different dumps may run on separate workers, subject to database capacity.
+
+PHP can stream a 50 GB database in bounded chunks, but this is not a performance guarantee. The executor holds up to 1,000 rows at a time, so large JSON/BLOB rows increase peak memory. Each table is staged locally as gzip before upload; provision temporary disk space for the largest compressed table, plus artifact storage if using a local disk. Benchmark a representative dataset, set an appropriate worker timeout, and monitor source I/O and snapshot age. Long InnoDB snapshots retain old row versions; for very large production dumps, prefer an explicitly configured dedicated replica or a restored production snapshot. A replica must be configured as its own source connection, not merely as the app connection's `read` host.
 
 #### Scoped dumps
 
@@ -234,11 +270,11 @@ Without `--dry-run`, the plan is put through the extraction gate before a single
 
 1. select an executor through `ExecutorManager::driver()` — `config('dead-drop.executor')` (`DEAD_DROP_EXECUTOR`, default `php`) names it; an unknown name fails with `Unsupported DeadDrop executor [{name}].`;
 2. write `manifest.json` with `status: "writing"`;
-3. export every plan step in order, printing one progress line per table (`  mysql.companies … 3 rows`) as it goes — each row is redacted before it is written, and the read for a step goes through the write connection, so a source with a read/write split reads its own committed rows rather than a replica that may lag behind them;
+3. export every plan step in order, printing one progress line per table (`  mysql.companies … 3 rows`) as it goes — each row is redacted before it is written, and the read for a step goes through the write connection, using the private snapshot connection for MySQL/MariaDB;
 4. flip the manifest's `status` to `"complete"`;
 5. print the plan table, totals and unresolved references (as above), followed by `Artifact: {disk}:{path}/{id}`.
 
-A `QueryException` during extraction — a table the connection turns out not to be allowed to read, say — is reported as `Extraction failed: {message}` and exits 1, leaving the manifest at `status: "writing"`; `dead-drop:dumps` (below) flags it and `dead-drop:pull` refuses to load it.
+A `QueryException` during extraction — a table the connection turns out not to be allowed to read, say — is reported as `Extraction failed: {message}` and exits 1, marking the manifest `status: "failed"` when the disk remains writable; `dead-drop:dumps` (below) flags it and `dead-drop:pull` refuses to load it.
 
 **Phase boundary:** native executors and composite primary keys are not implemented in this phase.
 
@@ -281,7 +317,7 @@ A dump is written to `{disk}:{path}/{id}/`, where `{id}` is `Ymd-His-<6 random l
 `manifest.json` fields:
 
 - `version` — the manifest format version (currently `1`).
-- `id`, `status` (`writing` or `complete`), `created_at`, `package_version`, `root`, `since`, `executor`.
+- `id`, `status` (`queued`, `writing`, `failed`, or `complete`), `created_at`, `package_version`, `root`, `since`, `executor`.
 - `connections` — every connection in the dump, keyed by name, each with its `driver` and the `database` name it was read from — the name only, never a host or a credential, and for SQLite the file name rather than the path (`null` for a connection with no database name, and absent from artifacts written before this was recorded).
 - `tables` — in plan-step (and load) order, each with `connection`, `table`, `file`, `format`, `rows`, `bytes`, `primary_key`, `columns` (`name` and `ColumnType` backing value, in schema order) and `redacted` (the columns whose values were changed — a `keep` entry runs as a passthrough and is deliberately not listed).
 - `unresolved` — the same unresolved-reference entries the plan prints (`connection`, `table`, `column`, `reason`).
@@ -362,6 +398,17 @@ Please see [CHANGELOG](CHANGELOG.md) for more information on what has changed re
 ## Contributing
 
 Thank you for considering contributing to Dead Drop! Please review our [contributing guide](.github/CONTRIBUTING.md) to get started.
+
+### MySQL integration tests
+
+The default test suite skips tests that need a live MySQL server. To run them, supply an isolated test server whose user can create and drop databases. Tests create randomly named `dead_drop_test_*` databases and remove them afterwards:
+
+```bash
+DEAD_DROP_TEST_MYSQL_PORT=3306 DEAD_DROP_TEST_MYSQL_USER=root \
+DEAD_DROP_TEST_MYSQL_PASSWORD=testing vendor/bin/pest tests/Feature/Extraction/MySqlSnapshotTest.php
+```
+
+`DEAD_DROP_TEST_MYSQL_HOST` defaults to `127.0.0.1`. These tests also run in CI against MySQL 8.0.
 
 ## Security Vulnerabilities
 

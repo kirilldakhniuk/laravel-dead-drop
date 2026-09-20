@@ -8,13 +8,14 @@ use DateTimeInterface;
 use DeadDrop\DeadDrop\Config\ConfigSet;
 use DeadDrop\DeadDrop\Config\TableClass;
 use DeadDrop\DeadDrop\Config\TableConfig;
+use DeadDrop\DeadDrop\Extraction\SourceConnections;
 use DeadDrop\DeadDrop\Schema\SchemaSet;
-use Illuminate\Support\Facades\DB;
 
 final class Planner
 {
     public function __construct(
         private readonly Traverser $traverser,
+        private readonly SourceConnections $connections = new SourceConnections,
     ) {}
 
     /**
@@ -72,7 +73,7 @@ final class Planner
             return null;
         }
 
-        $rows = DB::connection($connection)->table($table)->count();
+        $rows = $this->connections->get($connection)->table($table)->count();
 
         if ($rows === 0) {
             return null;

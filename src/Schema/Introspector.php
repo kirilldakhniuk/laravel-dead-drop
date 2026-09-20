@@ -5,20 +5,20 @@ declare(strict_types=1);
 namespace DeadDrop\DeadDrop\Schema;
 
 use DeadDrop\DeadDrop\Drivers\DriverFactory;
-use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\Schema;
+use DeadDrop\DeadDrop\Extraction\SourceConnections;
 
 final class Introspector
 {
     public function __construct(
         private readonly DriverFactory $drivers,
+        private readonly SourceConnections $connections = new SourceConnections,
     ) {}
 
     public function inspect(string $connection): DatabaseSchema
     {
-        $db = DB::connection($connection);
+        $db = $this->connections->get($connection);
         $driver = $this->drivers->for($db);
-        $builder = Schema::connection($connection);
+        $builder = $db->getSchemaBuilder();
         $estimates = $driver->estimatedRowCounts($db);
         $schema = $driver->currentSchema($db);
 

@@ -1,6 +1,8 @@
 # Release Notes
 
-## Unreleased
+## [Unreleased](https://github.com/kirilldakhnyuk/laravel-dead-drop/compare/v1.0.0...main)
+
+## [v1.0.0](https://github.com/kirilldakhnyuk/laravel-dead-drop/releases/tag/v1.0.0) - 2026-09-21
 
 First release. `kirilldakhnyuk/laravel-dead-drop` replaces the abandoned `kirilldakhniuk/dead-drop`; the PHP namespace, config key, commands and publish tags are unchanged.
 

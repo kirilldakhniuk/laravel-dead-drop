@@ -3,11 +3,11 @@
 </div>
 
 <p align="center">
-    <a href="https://packagist.org/packages/kirilldakhniuk/laravel-dead-drop"><img src="https://img.shields.io/packagist/v/kirilldakhniuk/laravel-dead-drop.svg?style=flat-square" alt="Packagist"></a>
-    <a href="https://packagist.org/packages/kirilldakhniuk/laravel-dead-drop"><img src="https://img.shields.io/packagist/php-v/kirilldakhniuk/laravel-dead-drop.svg?style=flat-square" alt="PHP from Packagist"></a>
-    <a href="https://packagist.org/packages/kirilldakhniuk/laravel-dead-drop"><img src="https://badge.laravel.cloud/badge/kirilldakhniuk/laravel-dead-drop?style=flat" alt="Laravel versions"></a>
-    <a href="https://github.com/kirilldakhniuk/laravel-dead-drop/actions"><img alt="GitHub Workflow Status (main)" src="https://img.shields.io/github/actions/workflow/status/kirilldakhniuk/laravel-dead-drop/tests.yml?branch=main&label=Tests&style=flat-square"></a>
-    <a href="https://packagist.org/packages/kirilldakhniuk/laravel-dead-drop"><img src="https://img.shields.io/packagist/dt/kirilldakhniuk/laravel-dead-drop.svg?style=flat-square" alt="Total Downloads"></a>
+    <a href="https://packagist.org/packages/kirilldakhnyuk/laravel-dead-drop"><img src="https://img.shields.io/packagist/v/kirilldakhnyuk/laravel-dead-drop.svg?style=flat-square" alt="Packagist"></a>
+    <a href="https://packagist.org/packages/kirilldakhnyuk/laravel-dead-drop"><img src="https://img.shields.io/packagist/php-v/kirilldakhnyuk/laravel-dead-drop.svg?style=flat-square" alt="PHP from Packagist"></a>
+    <a href="https://packagist.org/packages/kirilldakhnyuk/laravel-dead-drop"><img src="https://badge.laravel.cloud/badge/kirilldakhnyuk/laravel-dead-drop?style=flat" alt="Laravel versions"></a>
+    <a href="https://github.com/kirilldakhnyuk/laravel-dead-drop/actions"><img alt="GitHub Workflow Status (main)" src="https://img.shields.io/github/actions/workflow/status/kirilldakhnyuk/laravel-dead-drop/tests.yml?branch=main&label=Tests&style=flat-square"></a>
+    <a href="https://packagist.org/packages/kirilldakhnyuk/laravel-dead-drop"><img src="https://img.shields.io/packagist/dt/kirilldakhnyuk/laravel-dead-drop.svg?style=flat-square" alt="Total Downloads"></a>
 </p>
 
 Dead Drop is a Laravel package that discovers your database schema, builds a reviewed per-connection config describing how each table should be classified, scoped and redacted, detects drift between that config and the live schema, dumps the whole database — every table the config does not skip, redacted — to a portable artifact, and pulls that artifact into a local or staging database. Native executors (`mysqldump`, `mysqlsh`, `psql`), composite primary keys and schema creation on the target are not implemented yet. Requires PHP ^8.3, the `zlib` extension (artifacts are gzipped) and Laravel 12 or 13.
@@ -17,7 +17,7 @@ Dead Drop is a Laravel package that discovers your database schema, builds a rev
 You can install the package via Composer:
 
 ```bash
-composer require kirilldakhniuk/laravel-dead-drop
+composer require kirilldakhnyuk/laravel-dead-drop
 ```
 
 You may publish all of the package's resources at once:
@@ -415,7 +415,7 @@ Please review [our security policy](.github/SECURITY.md) on how to report securi
 
 ## Credits
 
-- [Kirill D.](https://github.com/kirilldakhniuk)
+- [Kirill D.](https://github.com/kirilldakhnyuk)
 - [All Contributors](../../contributors)
 
 ## License

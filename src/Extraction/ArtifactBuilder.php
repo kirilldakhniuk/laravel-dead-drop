@@ -202,10 +202,10 @@ final class ArtifactBuilder
 
     private function packageVersion(): string
     {
-        if (! InstalledVersions::isInstalled('kirilldakhniuk/laravel-dead-drop')) {
+        if (! InstalledVersions::isInstalled('kirilldakhnyuk/laravel-dead-drop')) {
             return 'dev';
         }
 
-        return InstalledVersions::getPrettyVersion('kirilldakhniuk/laravel-dead-drop') ?? 'dev';
+        return InstalledVersions::getPrettyVersion('kirilldakhnyuk/laravel-dead-drop') ?? 'dev';
     }
 }

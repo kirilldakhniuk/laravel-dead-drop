@@ -64,8 +64,16 @@ jobs:
       - name: Linter
         run: composer lint:check
 
+      # Type coverage is a property of the source, identical on every leg, so
+      # one run says everything twelve would. Twelve were also twelve chances
+      # to hit the cache race in pest-plugin-type-coverage, which persists
+      # .temp/v3.php from forked workers through a bare file_put_contents and
+      # leaves a half-written array for the next reader. FORK_MEM_PER_PROC
+      # drives pokio's worker count to one, so nothing races.
       - name: Type Coverage
-        if: runner.os != 'Windows'
+        if: matrix.os == 'ubuntu-latest' && matrix.php == 8.5 && matrix.laravel == '13.*' && matrix.stability == 'prefer-stable'
+        env:
+          FORK_MEM_PER_PROC: 999999999999
         run: composer test:types
 
       - name: Test Suite

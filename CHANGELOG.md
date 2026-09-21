@@ -2,6 +2,8 @@
 
 ## [Unreleased](https://github.com/kirilldakhnyuk/laravel-dead-drop/compare/v1.0.0...main)
 
+- Fixed `dead-drop:pull` aborting silently with a success exit code on a host with no terminal — a container, a cron job, a managed platform. Its `--force` guard consulted Symfony's interactive flag, which stays true unless `--no-interaction` is passed, so the run reached the confirmation, and Laravel Prompts answered it with its own `false` default: `Aborted.` and exit `0`, from a command that was asked to load data. It now requires a real terminal to ask, and refuses without `--force` exactly as it does under `--no-interaction`. `dead-drop:init` and the artifact and connection prompts in `dead-drop:pull` took the same flag and now take the same check.
+
 ## [v1.0.0](https://github.com/kirilldakhnyuk/laravel-dead-drop/releases/tag/v1.0.0) - 2026-09-21
 
 First release. `kirilldakhnyuk/laravel-dead-drop` replaces the abandoned `kirilldakhniuk/dead-drop`; the PHP namespace, config key, commands and publish tags are unchanged.

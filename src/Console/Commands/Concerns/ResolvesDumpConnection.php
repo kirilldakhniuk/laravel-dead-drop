@@ -13,6 +13,8 @@ use function Laravel\Prompts\select;
 
 trait ResolvesDumpConnection
 {
+    use DetectsTerminal;
+
     private bool $plannedByChoice = false;
 
     private function dumpRoot(ConfigSet $config): ?Root
@@ -126,15 +128,5 @@ trait ResolvesDumpConnection
         ) === 'plan';
 
         return $this->plannedByChoice;
-    }
-
-    private function canAsk(): bool
-    {
-        return $this->input->isInteractive() && ($this->hasTerminal() || $this->laravel->runningUnitTests());
-    }
-
-    private function hasTerminal(): bool
-    {
-        return defined('STDIN') && function_exists('stream_isatty') && stream_isatty(STDIN);
     }
 }

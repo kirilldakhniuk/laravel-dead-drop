@@ -68,7 +68,7 @@ final class PullCommand extends Command
         $this->warnWhenTargetIsSource($manifest, $target);
 
         if ($this->option('force') !== true) {
-            if (! $this->input->isInteractive()) {
+            if (! $this->canAsk()) {
                 $this->error('Pass --force to load without confirmation when running non-interactively.');
 
                 return self::FAILURE;

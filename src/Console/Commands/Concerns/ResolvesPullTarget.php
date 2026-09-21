@@ -18,6 +18,8 @@ use function Laravel\Prompts\select;
 
 trait ResolvesPullTarget
 {
+    use DetectsTerminal;
+
     private const int ARTIFACT_CHOICE_LIMIT = 15;
 
     /**
@@ -31,7 +33,7 @@ trait ResolvesPullTarget
             return $this->loadable($reader->manifest($id));
         }
 
-        if (! $this->input->isInteractive()) {
+        if (! $this->canAsk()) {
             return $reader->latestComplete() ?? $this->noArtifact($disk, $path);
         }
 
@@ -170,7 +172,7 @@ trait ResolvesPullTarget
 
         $default = (string) config('database.default');
 
-        if (! $this->input->isInteractive()) {
+        if (! $this->canAsk()) {
             if (! in_array($default, $configured, true)) {
                 $this->error("Unknown database connection [{$default}].");
 

@@ -11,6 +11,7 @@ use DeadDrop\DeadDrop\Config\ConnectionConfig;
 use DeadDrop\DeadDrop\Config\Reference;
 use DeadDrop\DeadDrop\Config\TableClass;
 use DeadDrop\DeadDrop\Config\TableConfig;
+use DeadDrop\DeadDrop\Console\Commands\Concerns\DetectsTerminal;
 use DeadDrop\DeadDrop\Inference\EdgeInferrer;
 use DeadDrop\DeadDrop\Inference\InferredEdge;
 use DeadDrop\DeadDrop\Inference\MorphPairDetector;
@@ -31,6 +32,8 @@ use function Laravel\Prompts\multiselect;
 
 final class InitCommand extends Command
 {
+    use DetectsTerminal;
+
     /** @var string */
     protected $signature = 'dead-drop:init {--connection=* : Connections to enroll} {--skip=* : Tables to force to skip} {--path= : Directory for the per-connection config files (defaults to config_path(config(\'dead-drop.config_path\')))}';
 
@@ -58,7 +61,7 @@ final class InitCommand extends Command
         $skip = array_values(array_map('strval', Arr::wrap($this->option('skip'))));
 
         if ($connections === []) {
-            if (! $this->input->isInteractive()) {
+            if (! $this->canAsk()) {
                 $this->error('Pass --connection=<name> (repeatable) when running without interaction.');
 
                 return self::FAILURE;

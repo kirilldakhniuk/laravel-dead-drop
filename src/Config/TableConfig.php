@@ -11,11 +11,15 @@ use ValueError;
  * One table's reviewed plan: how it is treated, which columns it had at the
  * last init (so column drift is detectable), where it points, what is
  * redacted, and how it is scoped.
+ *
+ * A `skip` table records no columns: drift is only reported for tables a
+ * dump reads, so the list would be written and merged forever without ever
+ * being compared against anything.
  */
 final readonly class TableConfig
 {
     /**
-     * @param  list<string>  $columns  the table's column names in schema order
+     * @param  list<string>  $columns  the table's column names in schema order; empty for a `skip` table
      * @param  array<string, Reference>  $references  keyed by the referencing column
      * @param  array<string, string>  $redact  transformer keyed by column
      * @param  array{type: string, id: string}|null  $morph
@@ -54,8 +58,8 @@ final readonly class TableConfig
      * The rendered shape, and the single source of truth for key order and
      * sorting: `class`, `removed` (only when true), `window`, `exclude`,
      * `morph`, `columns`, `references`, `redact`, with null and empty keys
-     * omitted, `columns` always present in schema order, and `references`
-     * and `redact` sorted by column.
+     * omitted, `columns` in schema order for every table a dump reads, and
+     * `references` and `redact` sorted by column.
      *
      * @return array{
      *     class: string,
@@ -63,7 +67,7 @@ final readonly class TableConfig
      *     window?: string,
      *     exclude?: string,
      *     morph?: array{type: string, id: string},
-     *     columns: list<string>,
+     *     columns?: list<string>,
      *     references?: array<string, array<array-key, string|bool>>,
      *     redact?: array<string, string>,
      * }
@@ -88,7 +92,12 @@ final readonly class TableConfig
             $table['morph'] = $this->morph;
         }
 
-        $table['columns'] = $this->columns;
+        // Gated on the final class rather than on emptiness, so a table a
+        // human forced to `skip` cannot pick the list back up from whatever
+        // `init` discovered for it.
+        if ($this->class !== TableClass::Skip) {
+            $table['columns'] = $this->columns;
+        }
 
         $references = [];
 

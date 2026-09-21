@@ -26,7 +26,7 @@ it('parses a rendered config back into an equal object', function () {
             morph: null,
         ),
         'comments' => new TableConfig('comments', TableClass::Data, ['id'], [], [], null, null, ['type' => 'commentable_type', 'id' => 'commentable_id']),
-        'legacy' => new TableConfig('legacy', TableClass::Skip, ['id'], [], [], null, null, null, removed: true),
+        'legacy' => new TableConfig('legacy', TableClass::Skip, [], [], [], null, null, null, removed: true),
     ]);
 
     $directory = tempDirectory();
@@ -40,12 +40,12 @@ it('parses a rendered config back into an equal object', function () {
 it('renders tables alphabetically with keys in a fixed order', function () {
     $config = new ConnectionConfig('mysql', [
         'users' => new TableConfig('users', TableClass::Data, ['id', 'email'], [], ['email' => 'hash'], null, null, null),
-        'companies' => new TableConfig('companies', TableClass::Skip, ['id'], [], [], null, null, null),
+        'companies' => new TableConfig('companies', TableClass::Skip, [], [], [], null, null, null),
     ]);
 
     $source = (new ConfigRenderer)->render($config);
 
-    expect($source)->toStartWith("<?php\n\ndeclare(strict_types=1);\n\nreturn [\n    'companies' => [\n        'class' => 'skip',\n        'columns' => ['id'],\n    ],\n    'users' => [\n        'class' => 'data',\n        'columns' => ['id', 'email'],\n        'redact' => [\n            'email' => 'hash',\n        ],\n    ],\n];\n");
+    expect($source)->toStartWith("<?php\n\ndeclare(strict_types=1);\n\nreturn [\n    'companies' => [\n        'class' => 'skip',\n    ],\n    'users' => [\n        'class' => 'data',\n        'columns' => ['id', 'email'],\n        'redact' => [\n            'email' => 'hash',\n        ],\n    ],\n];\n");
 });
 
 it('accepts hand written shorthand references as manual', function () {
@@ -121,4 +121,17 @@ it('names the file, the column and the accepted values for an unknown reference 
         ->toContain('Reference [orders.company_id]')
         ->toContain('psychic')
         ->toContain('fk, eloquent, guessed, manual');
+});
+
+it('records no columns for a skipped table, and drops one it is handed', function () {
+    // Drift is only reported for tables a dump reads, so a skip entry's column
+    // list is never compared against anything. A hand-edited file that still
+    // carries one keeps loading, and the next `init` renders it away.
+    $directory = tempDirectory();
+    file_put_contents($directory.'/handwritten.php', "<?php return ['sessions' => ['class' => 'skip', 'columns' => ['id', 'payload']]];");
+
+    $loaded = (new ConfigLoader)->load('handwritten', $directory);
+
+    expect($loaded)->not->toBeNull()
+        ->and((new ConfigRenderer)->render($loaded))->not->toContain('columns');
 });

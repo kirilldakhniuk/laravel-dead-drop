@@ -36,7 +36,7 @@ it('records edge sources, redactions, windows and morphs in the written config',
         ->and($config['users']['redact']['email'])->toBe('hash')
         ->and($config['orders']['window'])->toBe('created_at')
         ->and($config['comments']['morph'])->toBe(['type' => 'commentable_type', 'id' => 'commentable_id'])
-        ->and($config['failed_jobs'])->toBe(['class' => 'skip', 'columns' => ['id', 'payload']]);
+        ->and($config['failed_jobs'])->toBe(['class' => 'skip']);
 });
 
 it('hands back a suggestion its own gate would reject as review', function () {

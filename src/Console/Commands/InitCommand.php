@@ -254,7 +254,7 @@ final class InitCommand extends Command
             return new TableConfig(
                 name: $table->name,
                 class: TableClass::Skip,
-                columns: array_values($table->columnNames()),
+                columns: [],
                 references: [],
                 redact: [],
                 window: null,

@@ -59,17 +59,14 @@ return [
             'password' => 'bcrypt:secret',
         ],
     ],
-    'sessions' => [
-        'class' => 'skip',
-        'columns' => ['id', 'user_id', 'payload'],
-    ],
+    'sessions' => ['class' => 'skip'],
 ];
 ```
 
 | Key | Meaning |
 |---|---|
 | `class` | `data` dumps the table, `skip` never does. Framework tables (`migrations`, `jobs`, `sessions`, `cache`, `password_reset_tokens`, `personal_access_tokens`, `telescope_*`, `pulse_*`) are set to `skip` for you. |
-| `columns` | The columns as of the last `init`, so `check` can spot new ones. |
+| `columns` | The columns as of the last `init`, so `check` can spot new ones. Not recorded for a `skip` table — drift is only reported for tables a dump reads. |
 | `redact` | How to redact a column. See below. |
 | `removed` | Set when a table disappears from the schema. `init` marks it rather than throwing your decisions away. |
 

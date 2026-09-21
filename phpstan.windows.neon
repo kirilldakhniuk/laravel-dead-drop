@@ -1,0 +1,10 @@
+# PHPStan's parallel workers each boot Laravel through Larastan's bootstrap,
+# and they race to replace Testbench's bootstrap/cache/services.php. POSIX
+# renames over an open file; Windows refuses with "Access is denied", so the
+# Windows CI leg analyses in a single process.
+includes:
+    - phpstan.neon.dist
+
+parameters:
+    parallel:
+        maximumNumberOfProcesses: 1

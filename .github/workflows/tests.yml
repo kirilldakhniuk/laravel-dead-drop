@@ -19,7 +19,8 @@ jobs:
     runs-on: ${{ matrix.os }}
 
     strategy:
-      fail-fast: true
+      # One flaky leg should not cancel the other 23 and hide what they found.
+      fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest]
         php: [8.3, 8.4, 8.5]
@@ -53,7 +54,12 @@ jobs:
           composer run prepare
 
       - name: PHPStan
+        if: runner.os != 'Windows'
         run: composer analyse
+
+      - name: PHPStan (Windows)
+        if: runner.os == 'Windows'
+        run: vendor/bin/phpstan analyse --memory-limit=1G -c phpstan.windows.neon
 
       - name: Linter
         run: composer lint:check

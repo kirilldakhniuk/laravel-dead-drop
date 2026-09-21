@@ -93,6 +93,10 @@ final class ArtifactReader
                 throw new RuntimeException("Unable to open a temporary file at [{$tempPath}].");
             }
 
+            // A whole table's rows land here before they are read back, and the
+            // system temp directory is shared with every other user on the host.
+            chmod($tempPath, 0600);
+
             $copied = stream_copy_to_stream($stream, $handle);
             fclose($handle);
             fclose($stream);

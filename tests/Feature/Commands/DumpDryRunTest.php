@@ -134,6 +134,9 @@ it('reports a planning failure by the phase it happened in', function () {
 
     $this->artisan('dead-drop:dump', ['--connection' => 'dd_test', '--path' => $path, '--dry-run' => true, '--no-interaction' => true])
         ->expectsOutputToContain('Planning failed:')
+        // Laravel appends `(Connection: …, SQL: …)` with the bindings
+        // interpolated, which on a dump are the keys of collected rows.
+        ->doesntExpectOutputToContain('SQL:')
         ->assertFailed();
 });
 

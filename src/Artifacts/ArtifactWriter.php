@@ -67,6 +67,10 @@ final class ArtifactWriter
             throw new RuntimeException("Unable to open a temporary gzip stream at [{$tempPath}].");
         }
 
+        // A whole table's rows stage here before they are uploaded, and the
+        // system temp directory is shared with every other user on the host.
+        chmod($tempPath, 0600);
+
         return new TableFileWriter($this->disk, $this->path($file), $tempPath, $handle, $types);
     }
 }

@@ -214,3 +214,18 @@ it('reads a binary value from a stream before encoding it', function () {
 
     expect($decoded['blob'])->toBe("\x00\xff");
 });
+
+it('stages a table in the shared temp directory with no permissions for anyone else', function () {
+    // The staging file holds a whole table of production-derived rows, and
+    // sys_get_temp_dir() is shared with every other user on the host.
+    $writer = new ArtifactWriter(Storage::disk('local'), 'dead-drops', '20260912-141500-aaaaaa');
+    $file = $writer->table('dd_test.things.ndjson.gz', ['id' => ColumnType::Integer]);
+    $file->append(['id' => 1]);
+
+    $tempPath = (new ReflectionProperty($file, 'tempPath'))->getValue($file);
+
+    expect(is_file($tempPath))->toBeTrue()
+        ->and(fileperms($tempPath) & 0777)->toBe(0600);
+
+    $file->abort();
+})->skipOnWindows();

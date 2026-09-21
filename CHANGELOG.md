@@ -1,8 +1,11 @@
 # Release Notes
 
-## [Unreleased](https://github.com/kirilldakhniuk/laravel-dead-drop/compare/v0.1.0...1.x)
+## [Unreleased](https://github.com/kirilldakhniuk/laravel-dead-drop/compare/v1.0.0...1.x)
 
-- Renamed the package to `kirilldakhniuk/laravel-dead-drop`; the PHP namespace, config key, commands and publish tags are unchanged.
+## [v1.0.0](https://github.com/kirilldakhniuk/laravel-dead-drop/releases/tag/v1.0.0) - 2026-09-21
+
+First stable release. `kirilldakhniuk/laravel-dead-drop` replaces the abandoned `kirilldakhniuk/dead-drop`; the PHP namespace, config key, commands and publish tags are unchanged.
+
 - Added `dead-drop:init` to introspect one or more database connections, infer their relationships (foreign keys, Eloquent `belongsTo` relations, and column-naming guesses), classify and scan their tables, and write a reviewed, human-editable `<connection>.php` config file per connection — merging a re-run into the existing file so a human's decisions are never discarded and a vanished table is marked `removed` rather than deleted.
 - Added the per-connection config format: `class` (`data`/`lookup`/`skip`), `removed`, `window`, `exclude`, `morph`, `columns`, `references` (with `descend` and a `source` of `fk`/`eloquent`/`guessed`/`manual`), and `redact` (with `hash`/`mask`/`null`/`scramble`/`bcrypt:secret`/`fixed:redacted` suggestions and a `review` placeholder for columns that need a human decision).
 - Added `dead-drop:check` to detect drift between a connection's live schema and its reviewed config — new or removed tables and columns, and sensitive columns with no redaction decision — for use as a non-interactive CI gate.
@@ -15,8 +18,6 @@
 - `dead-drop:pull` now prompts for what it is not given: which complete artifact to load (newest first, labelled with its source connection, date and size; incomplete ones are counted rather than offered, and a single artifact is named rather than asked about) and which connection should receive it, each shown with the driver and database it points at.
 - `dead-drop:pull` can now load into a connection with the same name as the artifact's source — dumping on production over `mysql` and pulling into a laptop's `mysql` is the workflow it exists for, and a connection name says nothing about which database is behind it — so every configured connection is a candidate and the `pull.allow_environments` guard and the confirmation are what protect a database. A target the artifact names as a source is warned about (`This is the connection the artifact was dumped from; its rows will be replaced by their redacted copies.`), and the manifest now records the `database` name behind each source connection (the name only, never a host or a credential), so the confirmation can add ` — same database name as the source` when the two match. Manifests written without it are read as before.
 - `dead-drop:pull` now requires `--force` when it is not interactive (`Pass --force to load without confirmation when running non-interactively.`, refused before anything is written) instead of loading unasked, and the connection it names in the confirmation is read from the connection itself rather than the `database` config key, so an application configured with `DB_URL` is named correctly.
+- A table is staged through a `0600` file in the system temp directory while it is written and while it is read back, so a whole table of production-derived rows is never world-readable on a shared host.
+- A `QueryException` raised while planning or extracting is reported without the `(Connection: …, SQL: …)` tail Laravel appends, which interpolates the query's bindings — the same scrubbing `dead-drop:pull` already did.
 - Native executors (`mysqldump`, `mysqlsh`, `psql`), composite primary keys and scoped (root-row) dumps are not exposed yet.
-
-## [v0.1.0](https://github.com/kirilldakhniuk/laravel-dead-drop/compare/...v0.1.0) - 202x-xx-xx
-
-Initial pre-release.

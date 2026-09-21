@@ -60,7 +60,10 @@ final class DumpRunner
                 return new DumpResult($plan, [], $manifest);
             });
         } catch (QueryException $e) {
-            throw new RuntimeException("{$phase} failed: {$e->getMessage()}", previous: $e);
+            // Omit SQL bindings: they can contain row data.
+            $message = explode(' (Connection:', $e->getMessage(), 2)[0];
+
+            throw new RuntimeException("{$phase} failed: {$message}", previous: $e);
         }
     }
 }

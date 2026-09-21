@@ -244,7 +244,7 @@ final class InitCommand extends Command
         RedactionRules $rules,
         array $skip,
     ): TableConfig {
-        $class = $classifier->classify($table, $edges);
+        $class = $classifier->classify($table);
 
         if (in_array($table->name, $skip, true) || in_array("{$connection}.{$table->name}", $skip, true)) {
             $class = TableClass::Skip;
@@ -348,18 +348,16 @@ final class InitCommand extends Command
         $this->info("Wrote {$file}");
 
         $data = 0;
-        $lookup = 0;
         $skip = 0;
 
         foreach ($config->tables as $table) {
             match ($table->class) {
                 TableClass::Data => $data++,
-                TableClass::Lookup => $lookup++,
                 TableClass::Skip => $skip++,
             };
         }
 
-        $this->line("data: {$data}, lookup: {$lookup}, skip: {$skip}");
+        $this->line("data: {$data}, skip: {$skip}");
 
         $skipped = $eloquentSource->skipped();
 

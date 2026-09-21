@@ -42,7 +42,6 @@ final class Traverser
         $unresolved = [];
 
         $this->seedRoot($root, $graph, $schemas);
-        $this->seedLookups($root, $config, $schemas);
         $this->descend($root, $graph, $config, $schemas, $since, $unresolved);
 
         // Parents added for referential integrity must not expand the descending scope.
@@ -63,34 +62,6 @@ final class Traverser
             ?? throw new InvalidArgumentException("Root table {$root->connection}.{$root->table} has no single-column primary key.");
 
         $keySet->add($root->ids);
-    }
-
-    private function seedLookups(Root $root, ConfigSet $config, SchemaSet $schemas): void
-    {
-        foreach ($config->connections as $connection => $connectionConfig) {
-            foreach ($connectionConfig->tables as $name => $table) {
-                if ($table->removed || $table->class !== TableClass::Lookup) {
-                    continue;
-                }
-
-                if ($connection === $root->connection && $name === $root->table) {
-                    continue;
-                }
-
-                $keySet = $this->keySet($connection, $name, $schemas);
-                $primaryKey = $this->primaryKey($schemas, $connection, $name);
-
-                if ($keySet === null || $primaryKey === null) {
-                    continue;
-                }
-
-                $keySet->fill(
-                    DB::connection($connection)->table($name)
-                        ->select("{$name}.{$primaryKey} as k")
-                        ->orderBy("{$name}.{$primaryKey}"),
-                );
-            }
-        }
     }
 
     /**

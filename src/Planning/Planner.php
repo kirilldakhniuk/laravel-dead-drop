@@ -63,7 +63,7 @@ final class Planner
 
     private function fullTableStep(string $connection, string $table, TableConfig $config, SchemaSet $schemas): ?PlanStep
     {
-        if ($config->removed || ($config->class !== TableClass::Data && $config->class !== TableClass::Lookup)) {
+        if ($config->removed || $config->class !== TableClass::Data) {
             return null;
         }
 
@@ -135,13 +135,11 @@ final class Planner
             }
 
             $table = $schemas->for($keySet->connection)->table($keySet->table);
-            $lookup = $config->for($keySet->connection)->table($keySet->table)?->class === TableClass::Lookup;
-            $isRoot = $keySet->connection === $root->connection && $keySet->table === $root->table;
 
             $steps[] = new PlanStep(
                 connection: $keySet->connection,
                 table: $keySet->table,
-                keyTable: $lookup && ! $isRoot ? null : $keySet->tableName,
+                keyTable: $keySet->tableName,
                 rows: $rows,
                 estimatedBytes: $table === null ? 0 : intdiv($table->estimatedBytes * $rows, max($table->estimatedRows, 1)),
             );

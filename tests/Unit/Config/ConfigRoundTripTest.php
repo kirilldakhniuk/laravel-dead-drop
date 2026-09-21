@@ -40,12 +40,12 @@ it('parses a rendered config back into an equal object', function () {
 it('renders tables alphabetically with keys in a fixed order', function () {
     $config = new ConnectionConfig('mysql', [
         'users' => new TableConfig('users', TableClass::Data, ['id', 'email'], [], ['email' => 'hash'], null, null, null),
-        'companies' => new TableConfig('companies', TableClass::Lookup, ['id'], [], [], null, null, null),
+        'companies' => new TableConfig('companies', TableClass::Skip, ['id'], [], [], null, null, null),
     ]);
 
     $source = (new ConfigRenderer)->render($config);
 
-    expect($source)->toStartWith("<?php\n\ndeclare(strict_types=1);\n\nreturn [\n    'companies' => [\n        'class' => 'lookup',\n        'columns' => ['id'],\n    ],\n    'users' => [\n        'class' => 'data',\n        'columns' => ['id', 'email'],\n        'redact' => [\n            'email' => 'hash',\n        ],\n    ],\n];\n");
+    expect($source)->toStartWith("<?php\n\ndeclare(strict_types=1);\n\nreturn [\n    'companies' => [\n        'class' => 'skip',\n        'columns' => ['id'],\n    ],\n    'users' => [\n        'class' => 'data',\n        'columns' => ['id', 'email'],\n        'redact' => [\n            'email' => 'hash',\n        ],\n    ],\n];\n");
 });
 
 it('accepts hand written shorthand references as manual', function () {
@@ -106,13 +106,13 @@ it('names the file, the table and the accepted values for an unknown class', fun
         ->toContain('<path>')
         ->toContain('Table [orders]')
         ->toContain('lookupp')
-        ->toContain('data, lookup, skip');
+        ->toContain('data, skip');
 });
 
 it('refuses a table with no class instead of silently treating it as data', function () {
     expect(configLoadFailure("['orders' => ['columns' => ['id']]]"))
         ->toContain('<path>')
-        ->toContain("Table [orders] is missing a valid 'class' (data, lookup, skip).");
+        ->toContain("Table [orders] is missing a valid 'class' (data, skip).");
 });
 
 it('names the file, the column and the accepted values for an unknown reference source', function () {

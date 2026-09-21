@@ -88,7 +88,7 @@ function dumpFixture(?string $configDirectory = null, string $connection = 'dd_t
 function skipEveryTable(string $file): void
 {
     file_put_contents($file, str_replace(
-        ["'class' => 'data'", "'class' => 'lookup'"],
+        "'class' => 'data'",
         "'class' => 'skip'",
         (string) file_get_contents($file),
     ));

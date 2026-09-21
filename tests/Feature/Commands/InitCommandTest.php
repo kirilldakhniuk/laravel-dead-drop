@@ -17,13 +17,12 @@ it('writes a config file per connection without interaction', function () {
 });
 
 it('classifies known tables in the written config', function () {
-    // `countries` is only a lookup once it has a known, small row count.
     SchemaBuilder::seedTwoCompanies('dd_test');
 
     $config = require initFixtureConfig().'/dd_test.php';
 
     expect($config['failed_jobs']['class'])->toBe('skip')
-        ->and($config['countries']['class'])->toBe('lookup')
+        ->and($config['countries']['class'])->toBe('data')
         ->and($config['orders']['class'])->toBe('data')
         ->and($config['companies']['class'])->toBe('data');
 });

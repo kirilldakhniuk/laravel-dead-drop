@@ -2,6 +2,8 @@
 
 ## [Unreleased](https://github.com/kirilldakhniuk/laravel-dead-drop/compare/v1.0.0...1.x)
 
+- **Breaking:** removed the `lookup` table class. `class` is now `data` or `skip`. `lookup` changed nothing a dump did — `dead-drop:dump` took `data` and `lookup` tables identically, whole — so it asked every reviewer to make a decision with no observable effect. Its only live behaviour was in the traversal engine no command starts yet: a `lookup` table was seeded whole before a scoped traversal ran, and exported without its key set. A config naming `class: 'lookup'` is now rejected (`Table [x] has an unknown 'class' [lookup]; expected one of data, skip.`); change those entries to `data` for identical behaviour. `TableClassifier` is correspondingly reduced to the framework skip-list and no longer takes `SensitiveColumnDetector`, `MorphPairDetector` or an edge map, and `TableClassifier::classify()` drops its second argument.
+
 ## [v1.0.0](https://github.com/kirilldakhniuk/laravel-dead-drop/releases/tag/v1.0.0) - 2026-09-21
 
 First stable release. `kirilldakhniuk/laravel-dead-drop` replaces the abandoned `kirilldakhniuk/dead-drop`; the PHP namespace, config key, commands and publish tags are unchanged.

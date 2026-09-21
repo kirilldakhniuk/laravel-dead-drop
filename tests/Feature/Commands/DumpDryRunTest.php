@@ -69,7 +69,7 @@ it('writes no files and leaves no key tables behind', function () {
         ->and(collect(Schema::connection('dd_test')->getTables())->pluck('name')->filter(fn ($n) => str_starts_with($n, 'dd_keys_'))->all())->toBe([]);
 });
 
-it('plans every data and lookup table whole', function () {
+it('plans every data table whole', function () {
     $path = initFixtureConfig();
 
     // The plan table and the row counts share one line each, so the rendered

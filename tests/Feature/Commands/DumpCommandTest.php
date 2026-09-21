@@ -177,8 +177,8 @@ it('dumps the whole database and the artifact matches the source', function () {
         $rows[$table->table] = $table->rows;
     }
 
-    // Every `data` and `lookup` table with rows, and nothing else: `failed_jobs`
-    // is skipped and `comments` is empty.
+    // Every `data` table with rows, and nothing else: `failed_jobs` is
+    // skipped and `comments` is empty.
     expect(array_keys($rows))->toEqualCanonicalizing(['companies', 'users', 'customers', 'orders', 'order_items', 'countries'])
         ->and($manifest->root)->toBe('dd_test:*');
 

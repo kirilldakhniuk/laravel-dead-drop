@@ -42,10 +42,7 @@ function crossConnectionConfigDirectory(): string
         $contents,
     );
 
-    // A table with no sensitive columns and no outbound edges is classified as
-    // a lookup; the human edit that adds the cross-connection reference makes
-    // it a data table.
-    file_put_contents($file, str_replace("'class' => 'lookup',", "'class' => 'data',", $contents));
+    file_put_contents($file, $contents);
 
     return $path;
 }

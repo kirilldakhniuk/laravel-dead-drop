@@ -28,8 +28,8 @@ interface Executor
     public function supports(string $connectionDriver): bool;
 
     /**
-     * A null key set means the whole table is taken, which is how lookup
-     * tables are dumped.
+     * A null key set means the whole table is taken, which is how a
+     * whole-database dump takes every table.
      */
     public function export(PlanStep $step, Table $table, TableConfig $config, ?KeySet $keys, Redactor $redactor, ArtifactWriter $writer): TableArtifact;
 }

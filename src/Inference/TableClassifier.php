@@ -8,14 +8,10 @@ use DeadDrop\DeadDrop\Config\TableClass;
 use DeadDrop\DeadDrop\Schema\Table;
 
 /**
- * Decides how a table should be treated by a dump: `skip` for framework
- * bookkeeping tables, `lookup` for small reference tables that point at
- * nothing and hold nothing personal, `data` for everything else.
- *
- * Reference tables can be copied whole because they carry no relationships
- * to scope and no personal data to redact. Transaction tables always point
- * at something and must be scoped rather than copied; a table holding
- * personal data must be scoped and redacted rather than copied wholesale.
+ * Decides how a table should be treated by a dump: `skip` for the framework
+ * bookkeeping tables a dump has no business carrying, `data` for everything
+ * else. A human reviewing the generated config skips whatever else they do
+ * not want; this only names the ones nobody ever does.
  */
 final class TableClassifier
 {
@@ -49,68 +45,9 @@ final class TableClassifier
         'pulse_',
     ];
 
-    /**
-     * A lookup table must have a known row estimate smaller than this.
-     */
-    private const int LOOKUP_ROW_LIMIT = 10_000;
-
-    public function __construct(
-        private readonly SensitiveColumnDetector $sensitive,
-        private readonly MorphPairDetector $morphs,
-    ) {}
-
-    /**
-     * @param  array<string, InferredEdge>  $edges
-     */
-    public function classify(Table $table, array $edges): TableClass
+    public function classify(Table $table): TableClass
     {
-        if ($this->isSkipped($table->name)) {
-            return TableClass::Skip;
-        }
-
-        if ($this->isLookup($table, $edges)) {
-            return TableClass::Lookup;
-        }
-
-        return TableClass::Data;
-    }
-
-    /**
-     * @param  array<string, InferredEdge>  $edges
-     */
-    private function isLookup(Table $table, array $edges): bool
-    {
-        if ($this->hasOutboundEdge($table, $edges)) {
-            return false;
-        }
-
-        if ($this->morphs->detect($table) !== null) {
-            return false;
-        }
-
-        if ($this->sensitive->detect($table) !== []) {
-            return false;
-        }
-
-        // Row counts are estimates, and every engine reports "I don't know"
-        // as a zero — a freshly analysed table, a partition, a table the
-        // statistics have not caught up with. Copying an unknown-sized table
-        // whole is the expensive mistake, so an unknown size is not a lookup.
-        return $table->estimatedRows > 0 && $table->estimatedRows < self::LOOKUP_ROW_LIMIT;
-    }
-
-    /**
-     * @param  array<string, InferredEdge>  $edges
-     */
-    private function hasOutboundEdge(Table $table, array $edges): bool
-    {
-        foreach ($edges as $edge) {
-            if ($edge->table === $table->name) {
-                return true;
-            }
-        }
-
-        return false;
+        return $this->isSkipped($table->name) ? TableClass::Skip : TableClass::Data;
     }
 
     private function isSkipped(string $table): bool

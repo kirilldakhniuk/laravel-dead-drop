@@ -11,7 +11,7 @@ writes a reviewable configuration, exports selected tables with redaction, and
 loads an artifact into an existing local or staging schema.
 
 The public dump command exports whole tables from the selected connection.
-`data` and `lookup` tables are included; `skip` tables are excluded. There is
+`data` tables are included; `skip` tables are excluded. There is
 also an internal engine for selecting related rows starting from a root, but
 that engine does not have a public dump command yet.
 
@@ -74,9 +74,8 @@ precedence over naming guesses. A discovered relationship becomes a reference
 in the generated config, with its source recorded.
 
 [TableClassifier](../src/Inference/TableClassifier.php) skips known framework
-tables such as `jobs`, `sessions`, and `cache`. It classifies small reference
-tables without outgoing relationships or detected sensitive fields as
-`lookup`; other tables become `data`. These are starting decisions to review.
+tables such as `jobs`, `sessions`, and `cache`. Every other table becomes
+`data`. These are starting decisions to review.
 
 The sensitive-column detector proposes redaction rules. Ambiguous fields can
 receive `review`, which must be replaced with an explicit decision before an
@@ -382,7 +381,7 @@ back the completed import.
 `planFull()`. It calls [Traverser](../src/Planning/Traverser.php), which starts
 from root IDs and collects related keys into temporary database tables.
 
-The traversal seeds root and lookup keys, descends to configured child rows,
+The traversal seeds the root keys, descends to configured child rows,
 then ascends to referenced parents needed for referential completeness. Parents
 added during ascent do not restart child expansion and accidentally enlarge the
 requested scope. `window`, `exclude`, `descend`, and polymorphic-reference rules

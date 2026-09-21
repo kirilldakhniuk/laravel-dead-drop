@@ -46,7 +46,7 @@ it('exports the rows of a plan step joined to its key set with redaction applied
         ->and($rows[0]['company_id'])->toBe(1);
 });
 
-it('exports a whole lookup table when no key set is given', function () {
+it('exports a whole table when no key set is given', function () {
     $path = initFixtureConfig();
     $table = app(Introspector::class)->inspect('dd_test')->table('countries');
     $config = (new ConfigLoader)->loadAll($path)->for('dd_test')->table('countries');

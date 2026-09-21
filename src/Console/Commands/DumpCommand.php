@@ -34,7 +34,7 @@ final class DumpCommand extends Command
     protected $signature = 'dead-drop:dump {--connection= : Connection to dump (prompted when several are configured)} {--dry-run : Plan only, extract nothing} {--queue : Dispatch the dump to a queue worker} {--disk= : Disk to write the artifact to (defaults to dead-drop.disk)} {--path= : Config directory}';
 
     /** @var string */
-    protected $description = 'Dump every data and lookup table of a connection as a redacted artifact';
+    protected $description = 'Dump every data table of a connection as a redacted artifact';
 
     public function handle(ConfigLoader $loader, DumpRunner $runner, ArtifactBuilder $builder): int
     {

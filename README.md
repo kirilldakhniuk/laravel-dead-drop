@@ -53,7 +53,7 @@ This publishes `config/dead-drop.php`:
 ```bash
 php artisan dead-drop:init            # discover the schema, write config/dead-drop/<connection>.php
 php artisan dead-drop:check           # fail-closed drift + redaction gate (use it in CI)
-php artisan dead-drop:dump            # every data and lookup table, redacted
+php artisan dead-drop:dump            # every data table, redacted
 php artisan dead-drop:dump --dry-run  # plan only, extract nothing
 php artisan dead-drop:pull            # interactive: pick the artifact and a target connection
 ```
@@ -136,9 +136,8 @@ return [
 
 Every table entry can hold these keys, and nothing else:
 
-- `class` — one of three values:
-  - `data` — an ordinary table: dumped whole today, scoped by the traversal once scoped dumps are exposed, and redacted per its `redact` entries either way.
-  - `lookup` — a small reference table (a known row estimate of at least one and fewer than 10,000, no outbound reference, no polymorphic pair, nothing sensitive) that is copied whole rather than scoped. Row counts are estimates and every engine reports an unknown one as zero, so a table whose size cannot be established is treated as `data`, not copied whole.
+- `class` — one of two values:
+  - `data` — dump this table, whole and redacted per its `redact` entries.
   - `skip` — never dumped. Framework bookkeeping tables (`migrations`, `jobs`, `job_batches`, `failed_jobs`, `cache`, `cache_locks`, `sessions`, `password_reset_tokens`, `password_resets`, `personal_access_tokens`, and anything prefixed `telescope_` or `pulse_`) are skipped automatically; anything else can be forced to `skip` with `--skip=` or by hand-editing the file.
 - `removed` — present (and `true`) only when a table that used to be in this file has since disappeared from the schema. `dead-drop:init` never deletes an entry outright; it marks it `removed` so dropping it from the plan is a deliberate, reviewable edit.
 - `window` — the name of a `created_at`-like column used to scope a traversal to rows on or after a given date. `dead-drop:init` fills this in automatically when the table has a `created_at` column. Not applied by today's whole-database `dead-drop:dump`; see Scoped dumps below.
@@ -195,7 +194,7 @@ or when a named connection has no config file at all (it tells you to run `dead-
 
 ### Dumping
 
-`dead-drop:dump` dumps a database whole — every table the reviewed config classes as `data` or `lookup` — and, unless `--dry-run`, extracts it into a redacted artifact:
+`dead-drop:dump` dumps a database whole — every table the reviewed config classes as `data` — and, unless `--dry-run`, extracts it into a redacted artifact:
 
 ```bash
 php artisan dead-drop:dump
@@ -210,7 +209,7 @@ php artisan dead-drop:dump --connection=mysql --dry-run
 
 What the dump contains:
 
-- The scope is every table the connection's config classes as `data` or `lookup`, is not marked `removed`, and the live schema still has. `skip` tables are left out, as are tables with no rows.
+- The scope is every table the connection's config classes as `data`, is not marked `removed`, and the live schema still has. `skip` tables are left out, as are tables with no rows.
 - Every one of them is taken **whole**. `window` and `exclude` scope a traversal, and a whole-database dump runs none: they are not applied.
 - Because every row of every dumped table is taken, the result is referentially complete by construction: nothing is traversed and the plan never has unresolved references to report.
 - A connection whose every table is `skip` is named (`No dumpable tables on connection [x]; skipped.`) and left out rather than failing the run. Note that `dead-drop:pull` refuses an artifact that carries the same bare table name from two connections, so a multi-connection dump of schemas that share table names has to be pulled per connection.

@@ -68,12 +68,6 @@ it('does not descend an edge marked ascend only', function () {
     expect(collectedKeys($result, 'users'))->toBe([10, 50]);
 });
 
-it('includes lookup tables whole', function () {
-    $result = traverseFixture('dd_test.companies:1');
-
-    expect($result->keySets()['dd_test.countries']->count())->toBe(DB::connection('dd_test')->table('countries')->count());
-});
-
 it('applies the window when a since date is given', function () {
     $result = traverseFixture('dd_test.companies:1', since: new DateTimeImmutable('2026-06-01'));
 
@@ -110,7 +104,7 @@ it('re-descends a table that grows through a second inbound edge', function () {
         ->and(collectedKeys($result, 'order_items'))->toContain(4);
 });
 
-it('treats a lookup root as data and seeds only its ids', function () {
+it('seeds only the ids the root names', function () {
     $result = traverseFixture('dd_test.countries:1');
 
     expect(collectedKeys($result, 'countries'))->toBe([1]);

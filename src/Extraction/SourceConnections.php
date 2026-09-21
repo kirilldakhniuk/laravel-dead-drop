@@ -61,27 +61,43 @@ final class SourceConnections
                 // The first table read establishes the snapshot; all plan and export reads share it.
             }
 
-            return $callback();
+            $result = $callback();
         } finally {
-            $cleanupFailure = null;
+            $cleanupFailure = $this->release();
+        }
 
-            foreach ($this->snapshots as $db) {
-                try {
-                    $db->rollBack();
-                } catch (Throwable $e) {
-                    $cleanupFailure ??= $e;
-                } finally {
-                    $db->disconnect();
-                }
-            }
+        // Raised here rather than from the `finally`, so it can only reach a
+        // caller whose dump actually succeeded: when the callback threw, that
+        // exception is already on its way out and is the one worth seeing.
+        if ($cleanupFailure !== null) {
+            throw $cleanupFailure;
+        }
 
-            $this->snapshots = [];
-            $this->running = false;
+        return $result;
+    }
 
-            if ($cleanupFailure !== null) {
-                throw $cleanupFailure;
+    /**
+     * Rolls back and closes every snapshot connection, whatever the dump did,
+     * and reports the first rollback that failed.
+     */
+    private function release(): ?Throwable
+    {
+        $cleanupFailure = null;
+
+        foreach ($this->snapshots as $db) {
+            try {
+                $db->rollBack();
+            } catch (Throwable $e) {
+                $cleanupFailure ??= $e;
+            } finally {
+                $db->disconnect();
             }
         }
+
+        $this->snapshots = [];
+        $this->running = false;
+
+        return $cleanupFailure;
     }
 
     private function assertTransactionalTables(Connection $db, ConnectionConfig $config): void
